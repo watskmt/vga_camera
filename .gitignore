@@ -1,0 +1,19 @@
+# Vivado 生成物 (再生成可能)
+vga_camera.cache/
+vga_camera.gen/
+vga_camera.hw/
+vga_camera.ip_user_files/
+vga_camera.runs/
+vga_camera.sim/
+vga_camera.srcs/
+
+# 作業ログ・一時ファイル
+session_history.md
+dfx_runtime.txt
+
+# Claude 設定
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
