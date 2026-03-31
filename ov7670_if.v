@@ -94,14 +94,31 @@ module ov7670_if #(
     assign sio_test_pass = sio_pass_r;
     assign sio_test_fail = sio_fail_r;
 
-    // init_done 後はテストコントローラが sccb_master を駆動する
-    wire sccb_start_mux  = init_done ? test_sccb_start : init_sccb_start;
-    wire [7:0] raddr_mux = init_done ? 8'h0A           : init_reg_addr;
-    wire [7:0] rdata_mux = init_done ? 8'h00           : init_reg_data;
-    wire rd_mode_mux     = init_done;   // 0=3相書き込み, 1=読み出しテスト
+    // SCCB マスタ 優先順位:
+    //   Phase 1: init 中         → init シーケンサ (書き込み)
+    //   Phase 2: SIO テスト中    → SIO テストコントローラ (読み出し)
+    //   Phase 3: 通常動作中      → SW3 カラーバーコントローラ (書き込み)
+    reg  sw3_ctrl_start;
+    reg  sw3_busy;
+    reg  sw3_cmd;   // start 時にラッチした SW3 値
+    reg  sw3_seq;   // 0: SCALING_XSC(0x70) 書き込み中, 1: SCALING_YSC(0x71) 書き込み中
+
+    wire sccb_start_mux = !init_done        ? init_sccb_start  :
+                          !test_result_done ? test_sccb_start  :
+                                             sw3_ctrl_start;
+
+    wire [7:0] raddr_mux = !init_done        ? init_reg_addr :
+                           !test_result_done ? 8'h0A         :
+                           (sw3_seq          ? 8'h71 : 8'h70); // SCALING_YSC / SCALING_XSC
+
+    wire [7:0] rdata_mux = !init_done        ? init_reg_data :
+                           !test_result_done ? 8'h00         :
+                           (sw3_cmd          ? 8'h80 : 8'h00); // カラーバー ON/OFF (bit7)
+
+    wire rd_mode_mux     = (!init_done || !test_result_done) ? (init_done ? 1'b1 : 1'b0)
+                                                             : 1'b0;
 
     // --- SIO テストコントローラ ---
-    // init_done が立ったら PID レジスタ (0x0A) の読み出しを 1 回だけ発行する
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             test_sccb_start  <= 1'b0;
@@ -110,21 +127,58 @@ module ov7670_if #(
             test_triggered   <= 1'b0;
             test_result_done <= 1'b0;
         end else begin
-            test_sccb_start <= 1'b0;   // デフォルト: パルスなし
+            test_sccb_start <= 1'b0;
 
-            // 初期化完了後に 1 回だけ読み出しを発行
             if (init_done && !test_triggered) begin
                 test_triggered  <= 1'b1;
                 test_sccb_start <= 1'b1;
             end
 
-            // 読み出し完了 → 結果判定
             if (sccb_done && test_triggered && !test_result_done) begin
                 test_result_done <= 1'b1;
                 if (sccb_rd_data == 8'h76)
                     sio_pass_r <= 1'b1;
                 else
                     sio_fail_r <= 1'b1;
+            end
+        end
+    end
+
+    // --- SW3 カラーバーコントローラ ---
+    // test_result_done 後、SW3 変化を検出して SCALING_XSC/YSC を順に SCCB 書き込み
+    //   SW3=1 → 0x70=0x80, 0x71=0x80 (カラーバー ON: bit7)
+    //   SW3=0 → 0x70=0x00, 0x71=0x00 (通常映像)
+    reg sw3_prev;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            sw3_prev       <= 1'b0;
+            sw3_ctrl_start <= 1'b0;
+            sw3_busy       <= 1'b0;
+            sw3_cmd        <= 1'b0;
+            sw3_seq        <= 1'b0;
+        end else begin
+            sw3_ctrl_start <= 1'b0;
+
+            if (test_result_done) begin
+                sw3_prev <= sw3;
+                if (sw3 != sw3_prev && !sw3_busy) begin
+                    // 1レジスタ目 (SCALING_XSC=0x70) を送信開始
+                    sw3_ctrl_start <= 1'b1;
+                    sw3_busy       <= 1'b1;
+                    sw3_cmd        <= sw3;
+                    sw3_seq        <= 1'b0;
+                end
+                if (sw3_busy && sccb_done) begin
+                    if (!sw3_seq) begin
+                        // 1レジスタ目完了 → 2レジスタ目 (SCALING_YSC=0x71) を送信
+                        sw3_ctrl_start <= 1'b1;
+                        sw3_seq        <= 1'b1;
+                    end else begin
+                        // 2レジスタ目完了 → 完了
+                        sw3_busy <= 1'b0;
+                        sw3_seq  <= 1'b0;
+                    end
+                end
             end
         end
     end
@@ -226,16 +280,15 @@ module ov7670_capture (
     reg [1:0] pat_cnt;   // テストパターン循環カウンタ (0→1→2→0)
 
     // テストパターン定義: byte1/byte2 ペアを 3 種循環
-    wire [7:0] pat_b1 = (pat_cnt == 2'd0) ? 8'hF0 :
-                        (pat_cnt == 2'd1) ? 8'h0F : 
-                        (pat_cnt == 2'd2) ? 8'h00 : 8'hFF;
-    wire [7:0] pat_b2 = (pat_cnt == 2'd0) ? 8'h00 :
-                        (pat_cnt == 2'd1) ? 8'h00 : 
-                        (pat_cnt == 2'd2) ? 8'hF0 : 8'hF0;
+    //wire [7:0] pat_b1 = (pat_cnt == 2'd0) ? 8'hF0 :
+    //                    (pat_cnt == 2'd1) ? 8'h0F : 
+    //                    (pat_cnt == 2'd2) ? 8'h00 : 8'hFF;
+    //wire [7:0] pat_b2 = (pat_cnt == 2'd0) ? 8'h00 :
+    //                    (pat_cnt == 2'd1) ? 8'h00 : 
+    //                    (pat_cnt == 2'd2) ? 8'hF0 : 8'hF0;
 
-    // sw3=1 時は cam_d をパターンデータで置換
-    // byte_phase=0(byte1受信中) → pat_b1, byte_phase=1(byte2受信中) → pat_b2
-    wire [7:0] d_eff  = sw3 ? (byte_phase ? pat_b2 : pat_b1) : d;
+    // SW3 は OV7670 SCCB 経由でカラーバー制御するため cam_d はそのまま使用
+    wire [7:0] d_eff  = d;
 
     wire [11:0] rgb444    = {byte1[7:4], byte1[3:0], d_eff[7:4]};
     wire [7:0]  wr_row    = px_row[7:0];   // QVGA: 0-239 直接マッピング
@@ -246,8 +299,8 @@ module ov7670_capture (
     assign fb_wclk        = pclk;
     assign dbg_pat_cnt    = pat_cnt;
     assign dbg_byte_phase = byte_phase;
-    assign dbg_pat_b1     = pat_b1;
-    assign dbg_pat_b2     = pat_b2;
+    assign dbg_pat_b1     = byte1;
+    assign dbg_pat_b2     = d_eff;
 
 
     always @(posedge pclk or negedge rst_n) begin
@@ -299,9 +352,7 @@ module ov7670_capture (
                             begin
                                 fb_we    <= 1'b1;
                                 fb_waddr <= waddr_next;
-                                fb_wdata <= raw_mode
-                                            ? {byte1[7:4], byte1[7:4], byte1[7:4]}
-                                            : rgb444;
+                                fb_wdata <= rgb444;
                             end
                             px_col  <= px_col + 1;
                             pat_cnt <= (pat_cnt == 2'd3) ? 2'd0 : pat_cnt + 1;
@@ -336,7 +387,7 @@ module ov7670_init #(
     initial begin
         init_rom[ 0] = 16'h1280;
         init_rom[ 1] = 16'hFFF0;
-        init_rom[ 2] = 16'h1206;
+        init_rom[ 2] = 16'h1204;  // COM7: RGB出力(bit2=1), カラーバー無効(bit5=0)
         init_rom[ 3] = 16'h1100;
         init_rom[ 4] = 16'h0C30;
         init_rom[ 5] = 16'h3E00;
@@ -345,7 +396,7 @@ module ov7670_init #(
         init_rom[ 8] = 16'h7211;
         init_rom[ 9] = 16'h73F0;
         init_rom[10] = 16'hA202;
-        init_rom[11] = 16'h40C0;
+        init_rom[11] = 16'h40D0;  // COM15: フルレンジ(bit7=1), RGB565/555無効(bit5:4=00), RGB444用
         init_rom[12] = 16'h8C02;
         init_rom[13] = 16'h0400;
         init_rom[14] = 16'h3DC3;
