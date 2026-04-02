@@ -146,12 +146,9 @@ module ov7670_if #(
 
     // --- SW3 カラーバーコントローラ ---
     // test_result_done 後、SW3 変化を検出して SCALING_XSC/YSC を順に SCCB 書き込み
-    //   SW3=1 → 0x70=0x80, 0x71=0x80 (カラーバー ON: bit7)
-    //   SW3=0 → 0x70=0x00, 0x71=0x00 (通常映像)
-    reg sw3_prev;
+    //   0x70=0x00, 0x71=0x00 (通常映像)
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            sw3_prev       <= 1'b0;
             sw3_ctrl_start <= 1'b0;
             sw3_busy       <= 1'b0;
             sw3_cmd        <= 1'b0;
@@ -160,12 +157,11 @@ module ov7670_if #(
             sw3_ctrl_start <= 1'b0;
 
             if (test_result_done) begin
-                sw3_prev <= sw3;
-                if (sw3 != sw3_prev && !sw3_busy) begin
+                if (!sw3_busy) begin
                     // 1レジスタ目 (SCALING_XSC=0x70) を送信開始
                     sw3_ctrl_start <= 1'b1;
                     sw3_busy       <= 1'b1;
-                    sw3_cmd        <= sw3;
+                    sw3_cmd        <= 1'b0;
                     sw3_seq        <= 1'b0;
                 end
                 if (sw3_busy && sccb_done) begin
@@ -279,18 +275,10 @@ module ov7670_capture (
     reg [8:0] px_row;
     reg [1:0] pat_cnt;   // テストパターン循環カウンタ (0→1→2→0)
 
-    // テストパターン定義: byte1/byte2 ペアを 3 種循環
-    //wire [7:0] pat_b1 = (pat_cnt == 2'd0) ? 8'hF0 :
-    //                    (pat_cnt == 2'd1) ? 8'h0F : 
-    //                    (pat_cnt == 2'd2) ? 8'h00 : 8'hFF;
-    //wire [7:0] pat_b2 = (pat_cnt == 2'd0) ? 8'h00 :
-    //                    (pat_cnt == 2'd1) ? 8'h00 : 
-    //                    (pat_cnt == 2'd2) ? 8'hF0 : 8'hF0;
-
     // SW3 は OV7670 SCCB 経由でカラーバー制御するため cam_d はそのまま使用
     wire [7:0] d_eff  = d;
 
-    wire [11:0] rgb444    = {byte1[7:4], byte1[3:0], d_eff[7:4]};
+    wire [11:0] rgb444    = sw3 ? 12'h0f0 : {byte1[7:4], byte1[2:0], d_eff[7], d_eff[4:1]};
     wire [7:0]  wr_row    = px_row[7:0];   // QVGA: 0-239 直接マッピング
     wire [8:0]  wr_col    = px_col[8:0];   // QVGA: 0-319 直接マッピング
     wire [16:0] waddr_next = ({1'b0, wr_row, 8'b0} + {3'b0, wr_row, 6'b0})
@@ -381,51 +369,19 @@ module ov7670_init #(
     output reg         init_done
 );
 
-    localparam REG_NUM = 41;
+    localparam REG_NUM = 9;
     reg [15:0] init_rom [0:REG_NUM-1];
 
-    initial begin
-        init_rom[ 0] = 16'h1280;
-        init_rom[ 1] = 16'hFFF0;
-        init_rom[ 2] = 16'h1204;  // COM7: RGB出力(bit2=1), カラーバー無効(bit5=0)
-        init_rom[ 3] = 16'h1100;
-        init_rom[ 4] = 16'h0C30;
-        init_rom[ 5] = 16'h3E00;
-        init_rom[ 6] = 16'h7000;
-        init_rom[ 7] = 16'h7100;
-        init_rom[ 8] = 16'h7211;
-        init_rom[ 9] = 16'h73F0;
-        init_rom[10] = 16'hA202;
-        init_rom[11] = 16'h40D0;  // COM15: フルレンジ(bit7=1), RGB565/555無効(bit5:4=00), RGB444用
-        init_rom[12] = 16'h8C02;
-        init_rom[13] = 16'h0400;
-        init_rom[14] = 16'h3DC3;
-        init_rom[15] = 16'h1713;
-        init_rom[16] = 16'h1801;
-        init_rom[17] = 16'h32B6;
-        init_rom[18] = 16'h1902;
-        init_rom[19] = 16'h1A7A;
-        init_rom[20] = 16'h030A;
-        init_rom[21] = 16'h0F41;
-        init_rom[22] = 16'h1E00;
-        init_rom[23] = 16'h3300;
-        init_rom[24] = 16'h3C78;
-        init_rom[25] = 16'h6900;
-        init_rom[26] = 16'h74B4;
-        init_rom[27] = 16'h7588;
-        init_rom[28] = 16'h760E;
-        init_rom[29] = 16'h7791;
-        init_rom[30] = 16'hB800;
-        init_rom[31] = 16'hB90F;
-        init_rom[32] = 16'hC900;
-        init_rom[33] = 16'h4110;
-        init_rom[34] = 16'h561A;
-        init_rom[35] = 16'h3502;
-        init_rom[36] = 16'h5717;
-        init_rom[37] = 16'h13C7;
-        init_rom[38] = 16'h0020;
-        init_rom[39] = 16'h1040;
-        init_rom[40] = 16'hFFFF;
+    initial begin        
+        init_rom[0] = 16'h1280;
+        init_rom[1] = 16'hFFF0;
+        init_rom[2] = 16'h1214;
+        init_rom[3] = 16'h8c00;
+        init_rom[4] = 16'h40D0;
+        init_rom[5] = 16'h3A04;
+        init_rom[6] = 16'h3D80;
+        init_rom[7] = 16'hB084;
+        init_rom[8] = 16'hFFFF;
     end
 
     localparam DELAY_1MS = SYS_CLK_HZ / 1000;
