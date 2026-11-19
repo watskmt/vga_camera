@@ -4,8 +4,9 @@
 // =============================================================================
 // 機能:
 //   - XCLK から PCLK を生成 (CLKRC レジスタに従い分周)
-//   - VGA (640×480) タイミングで VSYNC / HREF を生成
-//   - RGB565 フォーマットでテストパターンを出力
+//   - VGA (640×480) / QVGA (320×240, COM7[4]=1) タイミングで VSYNC / HREF を生成
+//   - RGB565 (COM7[2]=1) または YUV422 YUYV (COM7[2]=0) でテストパターンを出力
+//     YUV 時: Byte1 = Y (BT.601 近似), Byte2 = U/V (0x80 固定 = 無彩色)
 //   - SCCB スレーブ: レジスタ書き込みに対応 (ソフトリセット含む)
 //
 // タイミング (VGA @ 30fps, PCLK = XCLK):
@@ -34,13 +35,8 @@ module ov7670_model #(
     // =========================================================================
     // タイミング定数
     // =========================================================================
-    localparam H_ACTIVE = 1280;  // 640 pixels × 2 bytes
     localparam H_BLANK  =  160;
-    localparam H_TOTAL  = H_ACTIVE + H_BLANK;   // 1440
-
-    localparam V_ACTIVE =  480;
     localparam V_BLANK  =   45;
-    localparam V_TOTAL  = V_ACTIVE + V_BLANK;   // 525
 
     // VSYNC High 期間 (フレーム先頭のブランク内)
     localparam V_SYNC_LINES = 3;
@@ -76,25 +72,41 @@ module ov7670_model #(
     // CLKRC[5:0] = 0 → 分周なし (PCLK = XCLK)
     // CLKRC[5:0] = 1 → 1/2 分周
     reg [6:0]  clk_div_cnt;
+    reg        pclk_div;
     wire [6:0] clk_div_val = {1'b0, `REG_CLKRC[5:0]};  // 0〜63
 
     always @(posedge xclk or negedge rst_n) begin
         if (!rst_n) begin
             clk_div_cnt <= 7'd0;
-            pclk        <= 1'b0;
+            pclk_div    <= 1'b0;
         end else if (pwdn) begin
-            pclk <= 1'b0;
-        end else if (clk_div_val == 7'd0) begin
-            pclk <= xclk;   // 分周なし
+            pclk_div <= 1'b0;
+        end else if (clk_div_cnt >= clk_div_val) begin
+            clk_div_cnt <= 7'd0;
+            pclk_div    <= ~pclk_div;
         end else begin
-            if (clk_div_cnt >= clk_div_val) begin
-                clk_div_cnt <= 7'd0;
-                pclk        <= ~pclk;
-            end else begin
-                clk_div_cnt <= clk_div_cnt + 1;
-            end
+            clk_div_cnt <= clk_div_cnt + 1;
         end
     end
+
+    // 分周なし (CLKRC=0) は XCLK をそのまま出す
+    // (以前は posedge xclk で pclk <= xclk としていたため High 固定になっていた)
+    always @* begin
+        if (!rst_n || pwdn)          pclk = 1'b0;
+        else if (clk_div_val == 7'd0) pclk = xclk;
+        else                          pclk = pclk_div;
+    end
+
+    // =========================================================================
+    // フォーマット / 解像度 (COM7)
+    // =========================================================================
+    wire        fmt_qvga = `REG_COM7[4];
+    wire        fmt_rgb  = `REG_COM7[2];
+    wire [10:0] H_ACTIVE = fmt_qvga ? 11'd640 : 11'd1280;   // ピクセル数 × 2 byte
+    wire [10:0] H_TOTAL  = H_ACTIVE + H_BLANK;
+    wire [9:0]  V_ACTIVE = fmt_qvga ? 10'd240 : 10'd480;
+    wire [9:0]  V_TOTAL  = V_ACTIVE + V_BLANK;
+    wire [9:0]  N_COLS   = fmt_qvga ? 10'd320 : 10'd640;
 
     // =========================================================================
     // フレームタイミング生成
@@ -139,10 +151,10 @@ module ov7670_model #(
             // ── ピクセルデータ ──
             if (h_active && v_active) begin
                 if (!byte_phase) begin
-                    d          <= pixel_byte1(col, v_cnt[9:0]);
+                    d          <= fmt_rgb ? pixel_byte1(col, v_cnt[9:0]) : pixel_y(col);
                     byte_phase <= 1'b1;
                 end else begin
-                    d          <= pixel_byte2(col, v_cnt[9:0]);
+                    d          <= fmt_rgb ? pixel_byte2(col, v_cnt[9:0]) : 8'h80;
                     byte_phase <= 1'b0;
                     col        <= col + 1;
                 end
@@ -152,6 +164,35 @@ module ov7670_model #(
             end
         end
     end
+
+    // =========================================================================
+    // テストパターン生成関数 (YUV: 輝度 Y)
+    //   カラーバー  : 各バーの RGB から Y = (77R + 150G + 29B) >> 8
+    //   グラデーション: 列に比例 (左端 0 → 右端 255)
+    // =========================================================================
+    function [7:0] pixel_y;
+        input [9:0] px;
+        reg   [9:0] seg;
+        reg  [17:0] t;
+        begin
+            if (H_BAR_EN) begin
+                seg = px / (N_COLS / 8);
+                case (seg[2:0])
+                    3'd0: pixel_y = 8'd255; // White
+                    3'd1: pixel_y = 8'd226; // Yellow  (R+G)
+                    3'd2: pixel_y = 8'd178; // Cyan    (G+B)
+                    3'd3: pixel_y = 8'd149; // Green
+                    3'd4: pixel_y = 8'd105; // Magenta (R+B)
+                    3'd5: pixel_y = 8'd76;  // Red
+                    3'd6: pixel_y = 8'd28;  // Blue
+                    3'd7: pixel_y = 8'd0;   // Black
+                endcase
+            end else begin
+                t       = px * 18'd255;
+                pixel_y = t / (N_COLS - 1);
+            end
+        end
+    endfunction
 
     // =========================================================================
     // テストパターン生成関数 (RGB565)

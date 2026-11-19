@@ -5,6 +5,7 @@
 // モジュール構成:
 //   ov7670_if      : トップレベル (XCLK生成 / SCCB初期化 / SIOテスト / キャプチャ統合)
 //   ov7670_capture : PCLK/HREF/VSYNC/D[7:0] → フレームバッファ書き込み
+//                    (YUV422 から輝度 Y を取り出し 8-bit モノクロで書き込む)
 //   sccb_master    : SCCB (I2C互換) マスタ (書き込み + 読み出し対応)
 //
 // SIO テスト:
@@ -38,7 +39,7 @@ module ov7670_if #(
     output wire        fb_wclk,
     output wire        fb_we,
     output wire [16:0] fb_waddr,
-    output wire [11:0] fb_wdata,
+    output wire [7:0]  fb_wdata,     // 8-bit 輝度 (Y)
 
     output wire        init_done,
     output wire        frame_start,
@@ -49,8 +50,8 @@ module ov7670_if #(
     output wire [7:0]  dbg_pat_b1,    // デバッグ: テストパターン byte1 (cam_pclk)
     output wire [7:0]  dbg_pat_b2,    // デバッグ: テストパターン byte2 (cam_pclk)
 
-    input  wire        raw_mode,
-    input  wire        sw3          // 1: cam_d をテストパターンで置換
+    input  wire        raw_mode,    // 1: 2 バイト目を Y とみなす (UYVY 順のとき)
+    input  wire        sw3          // 1: 書き込みデータを 0x80 固定 (デバッグ)
 );
 
     // --- XCLK 生成 ---
@@ -242,13 +243,13 @@ module ov7670_capture (
     input  wire        vsync,
     input  wire        href,
     input  wire [7:0]  d,
-    input  wire        raw_mode,
-    input  wire        sw3,         // 1: テストパターン挿入
+    input  wire        raw_mode,    // 0: YUYV (1 バイト目=Y) / 1: UYVY (2 バイト目=Y)
+    input  wire        sw3,         // 1: 書き込みデータを 0x80 固定 (デバッグ)
 
     output wire        fb_wclk,
     output reg         fb_we,
     output reg  [16:0] fb_waddr,
-    output reg  [11:0] fb_wdata,
+    output reg  [7:0]  fb_wdata,     // 8-bit 輝度 (Y)
 
     output reg         frame_start,
     output wire [1:0]  dbg_pat_cnt,    // デバッグ: テストパターンカウンタ
@@ -278,7 +279,8 @@ module ov7670_capture (
     // SW3 は OV7670 SCCB 経由でカラーバー制御するため cam_d はそのまま使用
     wire [7:0] d_eff  = d;
 
-    wire [11:0] rgb444    = sw3 ? 12'h0f0 : {byte1[7:4], byte1[2:0], d_eff[7], d_eff[4:1]};
+    // YUV422 (YUYV): 1 ピクセル = 2 バイト, Y は 1 バイト目 (raw_mode=1 なら 2 バイト目)
+    wire [7:0]  y8        = sw3 ? 8'h80 : (raw_mode ? d_eff : byte1);
     wire [7:0]  wr_row    = px_row[7:0];   // QVGA: 0-239 直接マッピング
     wire [8:0]  wr_col    = px_col[8:0];   // QVGA: 0-319 直接マッピング
     wire [16:0] waddr_next = ({1'b0, wr_row, 8'b0} + {3'b0, wr_row, 6'b0})
@@ -300,7 +302,7 @@ module ov7670_capture (
             px_row      <= 9'd0;
             fb_we       <= 1'b0;
             fb_waddr    <= 17'd0;
-            fb_wdata    <= 12'h000;
+            fb_wdata    <= 8'h00;
             frame_start <= 1'b0;
             pat_cnt     <= 2'd0;
         end else begin
@@ -340,7 +342,7 @@ module ov7670_capture (
                             begin
                                 fb_we    <= 1'b1;
                                 fb_waddr <= waddr_next;
-                                fb_wdata <= rgb444;
+                                fb_wdata <= y8;
                             end
                             px_col  <= px_col + 1;
                             pat_cnt <= (pat_cnt == 2'd3) ? 2'd0 : pat_cnt + 1;
@@ -369,19 +371,20 @@ module ov7670_init #(
     output reg         init_done
 );
 
-    localparam REG_NUM = 9;
+    localparam REG_NUM = 10;
     reg [15:0] init_rom [0:REG_NUM-1];
 
     initial begin        
         init_rom[0] = 16'h1280;
         init_rom[1] = 16'hFFF0;
-        init_rom[2] = 16'h1214;
-        init_rom[3] = 16'h8c00;
-        init_rom[4] = 16'h40D0;
-        init_rom[5] = 16'h3A04;
-        init_rom[6] = 16'h3D80;
+        init_rom[2] = 16'h1210;  // COM7  : QVGA, YUV 出力
+        init_rom[3] = 16'h8c00;  // RGB444: 無効
+        init_rom[4] = 16'h40C0;  // COM15 : 出力レンジ 0x00-0xFF (RGB565 無効)
+        init_rom[5] = 16'h3A04;  // TSLB  : [3]=0 → YUYV 順 (COM13[0]=0 と組み合わせ)
+        init_rom[6] = 16'h3D80;  // COM13 : ガンマ有効, UV スワップなし
         init_rom[7] = 16'hB084;
-        init_rom[8] = 16'hFFFF;
+        init_rom[8] = 16'h141A;  // COM9  : AGC ゲイン上限 4x ([6:4]=001), 予約ビットは初期値 0x4A のまま
+        init_rom[9] = 16'hFFFF;
     end
 
     localparam DELAY_1MS = SYS_CLK_HZ / 1000;

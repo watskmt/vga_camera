@@ -17,3 +17,11 @@ dfx_runtime.txt
 # OS
 .DS_Store
 Thumbs.db
+
+# ビルド・作業用の一時出力
+.bdt2/
+.jobs/
+*.mcs
+*.prm
+*.log
+firmware/_ide/

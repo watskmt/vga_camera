@@ -33,11 +33,14 @@ import fb_test_axi_vip_0_1_pkg::*;
 
 module fb_test_tb;
 
+    // TPG ベースアドレス (fix_fb_test_bd.tcl で axi_vip 空間に 0x44A1_0000 を割り当て)
+    localparam bit [31:0] TPG_BASE = 32'h44A1_0000;
+
     // =========================================================================
     // 信号宣言
     // =========================================================================
-    reg         PCLK;       // 25 MHz
-    reg         RESET_N;
+    reg         CLK;       // 25 MHz
+    reg         RESET;
 
     wire        HSYNC;
     wire        VSYNC;
@@ -50,8 +53,8 @@ module fb_test_tb;
     // DUT: fb_test_wrapper
     // =========================================================================
     fb_test_wrapper u_dut (
-        .PCLK    (PCLK),
-        .RESET_N (RESET_N),
+        .CLK    (CLK),
+        .RESET (RESET),
         .RGB     (RGB),
         .HSYNC   (HSYNC),
         .VSYNC   (VSYNC),
@@ -63,8 +66,8 @@ module fb_test_tb;
     // =========================================================================
     // 25 MHz クロック生成 (40 ns 周期)
     // =========================================================================
-    initial PCLK = 1'b0;
-    always  #20 PCLK = ~PCLK;
+    initial CLK = 1'b0;
+    always  #20 CLK = ~CLK;
 
     // =========================================================================
     // AXI VIP マスタエージェント
@@ -79,11 +82,11 @@ module fb_test_tb;
     // =========================================================================
     initial begin
         // ── リセット ─────────────────────────────────────────────────────
-        RESET_N = 1'b0;
-        repeat (30) @(posedge PCLK);
-        RESET_N = 1'b1;
+        RESET = 1'b1;
+        repeat (30) @(posedge CLK);
+        RESET = 1'b0;
         $display("[TB] %0t ns : Reset released", $time/1000);
-        repeat (20) @(posedge PCLK);
+        repeat (20) @(posedge CLK);
 
         // ── AXI VIP エージェント初期化 ───────────────────────────────────
         // new(エージェント名, IFパス)
@@ -108,7 +111,7 @@ module fb_test_tb;
         // エージェント起動 (start_master を呼ぶ前に set_* を完了させること)
         axi_mst.start_master();
         // ----------------------------------------------------------------
-        repeat (10) @(posedge PCLK);
+        repeat (10) @(posedge CLK);
 
         // ── TPG レジスタ設定 ──────────────────────────────────────────────
         // レジスタマップ (fb_test_v_tpg_0_0_CTRL_s_axi.v より):
@@ -119,10 +122,10 @@ module fb_test_tb;
         // v_axi4s_vid_out のロックは TPG の TUSER=1(SOF) が
         // VTC フレーム先頭と一致したときに成立する。
         // ap_start を VTC フレーム境界で書くことで最初のフレームからロックさせる。
-        axi_write(32'h0010, 32'd480);   // height = 480
-        axi_write(32'h0018, 32'd640);   // width  = 640
-        axi_write(32'h0020, 32'd2);     // bckgndId: 2 = Vertical Ramp (ROM不要)
-        axi_write(32'h0028, 32'd0);     // ovrlayId: 0 = none
+        axi_write(TPG_BASE + 32'h0010, 32'd480);   // height = 480
+        axi_write(TPG_BASE + 32'h0018, 32'd640);   // width  = 640
+        axi_write(TPG_BASE + 32'h0020, 32'd2);     // bckgndId: 2 = Vertical Ramp (ROM不要)
+        axi_write(TPG_BASE + 32'h0028, 32'd0);     // ovrlayId: 0 = none
         $display("[TB] %0t ns : TPG size/pattern set, waiting for VTC VBP...", $time/1000);
 
         // negedge VSYNC_1 = vsyncパルス終了 = VBP開始
@@ -130,8 +133,8 @@ module fb_test_tb;
         // HLS パイプラインが最初のピクセルを出すのに十分な時間を確保できる
         @(posedge VSYNC_1);  // vsync開始を待つ
         @(negedge VSYNC_1);  // vsync終了(=VBP開始)まで待つ
-        repeat (10) @(posedge PCLK);
-        axi_write(32'h0000, 32'h81);    // CTRL: ap_start=1, auto_restart=1
+        repeat (10) @(posedge CLK);
+        axi_write(TPG_BASE + 32'h0000, 32'h81);    // CTRL: ap_start=1, auto_restart=1
         $display("[TB] %0t ns : TPG ap_start at VBP start (26400 clk before active)", $time/1000);
 
         // ── locked 待ち (最大 5 フレーム) ───────────────────────────────
@@ -206,7 +209,7 @@ module fb_test_tb;
     // RGB 出力サンプリング (有効ピクセルを先頭 5 個だけ表示)
     // =========================================================================
     int px_sample_cnt = 0;
-    always @(posedge PCLK) begin
+    always @(posedge CLK) begin
         if (HSYNC && !VSYNC && px_sample_cnt < 5) begin
             px_sample_cnt++;
             $display("[TB] %0t ns : RGB sample #%0d = 0x%06X (R=%02X G=%02X B=%02X)",
