@@ -158,12 +158,6 @@
           <Attr Name="ScopedToCell" Val="fb_test_mig_7series_0_1"/>
         </FileInfo>
       </File>
-      <File Path="$PSRCDIR/sources_1/bd/frame_buffer/ip/frame_buffer_mig_7series_0_0/mig_b.prj">
-        <FileInfo>
-          <Attr Name="UsedIn" Val="synthesis"/>
-          <Attr Name="ScopedToCell" Val="frame_buffer_mig_7series_0_0"/>
-        </FileInfo>
-      </File>
       <Config>
         <Option Name="DesignMode" Val="RTL"/>
         <Option Name="TopModule" Val="vga_top"/>
