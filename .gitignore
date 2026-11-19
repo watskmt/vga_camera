@@ -5,7 +5,13 @@ vga_camera.hw/
 vga_camera.ip_user_files/
 vga_camera.runs/
 vga_camera.sim/
-vga_camera.srcs/
+# vga_camera.srcs は BD / IP 設定 (.bd .xci .prj) とソースのみ追跡
+vga_camera.srcs/utils_1/
+vga_camera.srcs/**/*.bak_*
+vga_camera.srcs/sources_1/ip/ila_vga_*/
+vga_camera.srcs/sources_1/ip/ila_cam/
+vga_camera.srcs/sources_1/ip/ila_cam_*/
+!vga_camera.srcs/sources_1/ip/ila_cam_11/
 
 # 作業ログ・一時ファイル
 session_history.md
