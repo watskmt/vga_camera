@@ -13,18 +13,15 @@
 ## =============================================================================
 
 ## ---------- スライドスイッチ ----------
-## SW0: カラーバー切り替え (High=カラーバー / Low=カメラ映像)
+## SW0: DDR3 へ書く映像の入力元 (High=TPG 水平ランプ / Low=カメラ)
 set_property PACKAGE_PIN A8       [get_ports sw_test]
 set_property IOSTANDARD  LVCMOS33 [get_ports sw_test]
-## SW1: cam_d 上位4ビット直接出力 (High=RAW / Low=通常, SW0より優先)
-set_property PACKAGE_PIN C11      [get_ports sw_raw]
-set_property IOSTANDARD  LVCMOS33 [get_ports sw_raw]
-## SW2: テストパターン種別 (High=モノクロ階調 / Low=RGBカラーバー)
-set_property PACKAGE_PIN C10      [get_ports sw_mono]
-set_property IOSTANDARD  LVCMOS33 [get_ports sw_mono]
-## SW3: cam_d テストパターン挿入 (High=0xF0/0x00→0x00/0xF0→0x00/0x0F 循環)
-set_property PACKAGE_PIN A10      [get_ports sw3]
-set_property IOSTANDARD  LVCMOS33 [get_ports sw3]
+## SW2: AGC/AEC 停止 (High=今のゲイン・露光で固定 / Low=自動)
+set_property PACKAGE_PIN C10      [get_ports sw_agc_hold]
+set_property IOSTANDARD  LVCMOS33 [get_ports sw_agc_hold]
+## SW3: カメラ画素を試験パターンに置換 (High=灰色地に黒い四角 / Low=カメラ)
+set_property PACKAGE_PIN A10      [get_ports sw_pat]
+set_property IOSTANDARD  LVCMOS33 [get_ports sw_pat]
 
 ## ---------- システムクロック (100 MHz) ----------
 set_property PACKAGE_PIN E3       [get_ports clk]
@@ -36,7 +33,7 @@ set_property PACKAGE_PIN D9       [get_ports btn_rst]
 set_property IOSTANDARD  LVCMOS33 [get_ports btn_rst]
 
 ## ---------- ステータス LED (LD0-LD3) ----------
-## led[0]=PLL lock  led[1]=SIO test pass  led[2]=SIO test fail  led[3]=reset
+## led[0]=MIG calib  led[1]=VDMA/TPG 設定完了  led[2]=エラー  led[3]=OV7670 PID OK
 set_property PACKAGE_PIN H5       [get_ports {led[0]}]
 set_property PACKAGE_PIN J5       [get_ports {led[1]}]
 set_property PACKAGE_PIN T9       [get_ports {led[2]}]
@@ -131,6 +128,11 @@ set_clock_groups -asynchronous \
 # DDR3 キャリブ完了信号 (MIG ui_clk) → pclk 同期化 FF 1 段目は非同期
 # =============================================================================
 set_false_path -to [get_cells {ddr3_calib_sync_reg[0]}]
+# cam_ddr: MIG ui_clk → SYSCLK の 2FF 同期 / スイッチ入力の 2FF 同期 (1 段目は非同期)
+set_false_path -to [get_cells {u_cam_ddr/calib_sync_reg[0]}]
+set_false_path -to [get_cells {u_cam_ddr/sel_sync_reg[0]}]
+# cam_ddr: 設定完了 (SYSCLK) → cam_pclk の 2FF 同期 (クロックグループ上も非同期)
+set_false_path -to [get_cells {u_cam_ddr/run_sync_reg[0]}]
 
 # =============================================================================
 # Debug Hub クロック

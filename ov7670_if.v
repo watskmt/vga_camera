@@ -4,8 +4,8 @@
 // =============================================================================
 // モジュール構成:
 //   ov7670_if      : トップレベル (XCLK生成 / SCCB初期化 / SIOテスト / キャプチャ統合)
-//   ov7670_capture : PCLK/HREF/VSYNC/D[7:0] → フレームバッファ書き込み
-//                    (YUV422 から輝度 Y を取り出し 8-bit モノクロで書き込む)
+//   ov7670_capture : PCLK/HREF/VSYNC/D[7:0] → 画素ストリーム (VGA 640×480)
+//                    (RGB565 の画素に, 行頭/行末/フレーム先頭の印を付ける)
 //   sccb_master    : SCCB (I2C互換) マスタ (書き込み + 読み出し対応)
 //
 // SIO テスト:
@@ -36,10 +36,12 @@ module ov7670_if #(
     output wire        cam_rst_o_n,
     output wire        cam_pwdn,
 
-    output wire        fb_wclk,
-    output wire        fb_we,
-    output wire [16:0] fb_waddr,
-    output wire [7:0]  fb_wdata,     // 8-bit 輝度 (Y)
+    // 画素ストリーム (pix_clk = pclk ドメイン, 1 画素 = pix_we 1 パルス)
+    output wire        pix_clk,
+    output wire        pix_we,
+    output wire        pix_sof,      // フレーム先頭画素 (0,0)
+    output wire        pix_eol,      // 行末画素 (x = 639)
+    output wire [15:0] pix_rgb,      // RGB565 {R[4:0], G[5:0], B[4:0]}
 
     output wire        init_done,
     output wire        frame_start,
@@ -50,8 +52,8 @@ module ov7670_if #(
     output wire [7:0]  dbg_pat_b1,    // デバッグ: テストパターン byte1 (cam_pclk)
     output wire [7:0]  dbg_pat_b2,    // デバッグ: テストパターン byte2 (cam_pclk)
 
-    input  wire        raw_mode,    // 1: 2 バイト目を Y とみなす (UYVY 順のとき)
-    input  wire        sw3          // 1: 書き込みデータを 0x80 固定 (デバッグ)
+    input  wire        sw3,         // 1: カメラ画素を試験パターン (灰色地に黒い四角) に置換 (非同期, スイッチ)
+    input  wire        agc_hold     // 1: AGC/AEC を止めて今のゲイン・露光で固定 (非同期, スイッチ)
 );
 
     // --- XCLK 生成 ---
@@ -98,23 +100,22 @@ module ov7670_if #(
     // SCCB マスタ 優先順位:
     //   Phase 1: init 中         → init シーケンサ (書き込み)
     //   Phase 2: SIO テスト中    → SIO テストコントローラ (読み出し)
-    //   Phase 3: 通常動作中      → SW3 カラーバーコントローラ (書き込み)
-    reg  sw3_ctrl_start;
-    reg  sw3_busy;
-    reg  sw3_cmd;   // start 時にラッチした SW3 値
-    reg  sw3_seq;   // 0: SCALING_XSC(0x70) 書き込み中, 1: SCALING_YSC(0x71) 書き込み中
+    //   Phase 3: 通常動作中      → 動作中コントローラ (書き込み, 必要なときだけ)
+    reg        run_start;
+    reg  [7:0] run_addr;
+    reg  [7:0] run_data;
 
     wire sccb_start_mux = !init_done        ? init_sccb_start  :
                           !test_result_done ? test_sccb_start  :
-                                             sw3_ctrl_start;
+                                             run_start;
 
     wire [7:0] raddr_mux = !init_done        ? init_reg_addr :
                            !test_result_done ? 8'h0A         :
-                           (sw3_seq          ? 8'h71 : 8'h70); // SCALING_YSC / SCALING_XSC
+                                               run_addr;
 
     wire [7:0] rdata_mux = !init_done        ? init_reg_data :
                            !test_result_done ? 8'h00         :
-                           (sw3_cmd          ? 8'h80 : 8'h00); // カラーバー ON/OFF (bit7)
+                                               run_data;
 
     wire rd_mode_mux     = (!init_done || !test_result_done) ? (init_done ? 1'b1 : 1'b0)
                                                              : 1'b0;
@@ -145,36 +146,55 @@ module ov7670_if #(
         end
     end
 
-    // --- SW3 カラーバーコントローラ ---
-    // test_result_done 後、SW3 変化を検出して SCALING_XSC/YSC を順に SCCB 書き込み
-    //   0x70=0x00, 0x71=0x00 (通常映像)
+    // --- 動作中コントローラ ---
+    // test_result_done 後:
+    //   1. SCALING_XSC (0x70) = 0x3A, SCALING_YSC (0x71) = 0x35 を 1 回だけ書く
+    //      (bit7 = 内蔵テストパターン OFF, 下位は初期値)
+    //   2. 以後は agc_hold が変わったときだけ COM8 (0x13) を書く
+    //        agc_hold=0: 0x8F (初期値: Fast AGC/AEC, AGC/AWB/AEC 自動)
+    //        agc_hold=1: 0x8A (AGC/AEC 停止 → GAIN/AECH は止めた時点の値のまま)
+    //   SCCB を常時動かすと SIOC/SIOD のトグルがセンサに乗る恐れがあるので、
+    //   必要なとき以外は SCCB を止めておく。
+    (* ASYNC_REG = "TRUE" *) reg [1:0] hold_sync;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) hold_sync <= 2'b00;
+        else        hold_sync <= {hold_sync[0], agc_hold};
+
+    reg [1:0] run_step;     // 0: 0x70, 1: 0x71, 2: COM8 監視
+    reg       run_busy;
+    reg       hold_applied; // COM8 に反映済みの agc_hold (リセット後の COM8 = 0x8F に対応して 0)
+    reg       hold_pend;
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            sw3_ctrl_start <= 1'b0;
-            sw3_busy       <= 1'b0;
-            sw3_cmd        <= 1'b0;
-            sw3_seq        <= 1'b0;
+            run_start    <= 1'b0;
+            run_addr     <= 8'h00;
+            run_data     <= 8'h00;
+            run_step     <= 2'd0;
+            run_busy     <= 1'b0;
+            hold_applied <= 1'b0;
+            hold_pend    <= 1'b0;
         end else begin
-            sw3_ctrl_start <= 1'b0;
+            run_start <= 1'b0;
 
             if (test_result_done) begin
-                if (!sw3_busy) begin
-                    // 1レジスタ目 (SCALING_XSC=0x70) を送信開始
-                    sw3_ctrl_start <= 1'b1;
-                    sw3_busy       <= 1'b1;
-                    sw3_cmd        <= 1'b0;
-                    sw3_seq        <= 1'b0;
-                end
-                if (sw3_busy && sccb_done) begin
-                    if (!sw3_seq) begin
-                        // 1レジスタ目完了 → 2レジスタ目 (SCALING_YSC=0x71) を送信
-                        sw3_ctrl_start <= 1'b1;
-                        sw3_seq        <= 1'b1;
-                    end else begin
-                        // 2レジスタ目完了 → 完了
-                        sw3_busy <= 1'b0;
-                        sw3_seq  <= 1'b0;
+                if (!run_busy) begin
+                    if (run_step == 2'd0) begin
+                        run_addr <= 8'h70; run_data <= 8'h3A;
+                        run_start <= 1'b1; run_busy <= 1'b1;
+                    end else if (run_step == 2'd1) begin
+                        run_addr <= 8'h71; run_data <= 8'h35;
+                        run_start <= 1'b1; run_busy <= 1'b1;
+                    end else if (hold_sync[1] != hold_applied) begin
+                        run_addr  <= 8'h13;
+                        run_data  <= hold_sync[1] ? 8'h8A : 8'h8F;
+                        hold_pend <= hold_sync[1];
+                        run_start <= 1'b1; run_busy <= 1'b1;
                     end
+                end else if (sccb_done) begin
+                    run_busy <= 1'b0;
+                    if (run_step != 2'd2) run_step     <= run_step + 2'd1;
+                    else                  hold_applied <= hold_pend;
                 end
             end
         end
@@ -218,12 +238,12 @@ module ov7670_if #(
         .vsync      (vsync),
         .href       (href),
         .d          (d),
-        .raw_mode   (raw_mode),
         .sw3        (sw3),
-        .fb_wclk    (fb_wclk),
-        .fb_we      (fb_we),
-        .fb_waddr   (fb_waddr),
-        .fb_wdata      (fb_wdata),
+        .pix_clk    (pix_clk),
+        .pix_we     (pix_we),
+        .pix_sof    (pix_sof),
+        .pix_eol    (pix_eol),
+        .pix_rgb    (pix_rgb),
         .frame_start   (frame_start),
         .dbg_pat_cnt   (dbg_pat_cnt),
         .dbg_byte_phase(dbg_byte_phase),
@@ -235,21 +255,26 @@ endmodule
 
 
 // =============================================================================
-// ov7670_capture (変更なし)
+// ov7670_capture  -  VGA (640×480) RGB565 の画素ストリーム
+//   pix_sof : (0,0) の画素 / pix_eol : 各行の x = CAM_W-1 の画素
+//   CAM_W / CAM_H を超える画素 (設定違いで行や列が長い場合) は出さない
 // =============================================================================
-module ov7670_capture (
+module ov7670_capture #(
+    parameter CAM_W = 640,
+    parameter CAM_H = 480
+)(
     input  wire        pclk,
     input  wire        rst_n,
     input  wire        vsync,
     input  wire        href,
     input  wire [7:0]  d,
-    input  wire        raw_mode,    // 0: YUYV (1 バイト目=Y) / 1: UYVY (2 バイト目=Y)
-    input  wire        sw3,         // 1: 書き込みデータを 0x80 固定 (デバッグ)
+    input  wire        sw3,         // 1: 試験パターン (灰色の地, 中央 240×160 が黒)
 
-    output wire        fb_wclk,
-    output reg         fb_we,
-    output reg  [16:0] fb_waddr,
-    output reg  [7:0]  fb_wdata,     // 8-bit 輝度 (Y)
+    output wire        pix_clk,
+    output reg         pix_we,
+    output reg         pix_sof,
+    output reg         pix_eol,
+    output reg  [15:0] pix_rgb,      // RGB565 {R[4:0], G[5:0], B[4:0]}
 
     output reg         frame_start,
     output wire [1:0]  dbg_pat_cnt,    // デバッグ: テストパターンカウンタ
@@ -276,17 +301,21 @@ module ov7670_capture (
     reg [8:0] px_row;
     reg [1:0] pat_cnt;   // テストパターン循環カウンタ (0→1→2→0)
 
-    // SW3 は OV7670 SCCB 経由でカラーバー制御するため cam_d はそのまま使用
     wire [7:0] d_eff  = d;
 
-    // YUV422 (YUYV): 1 ピクセル = 2 バイト, Y は 1 バイト目 (raw_mode=1 なら 2 バイト目)
-    wire [7:0]  y8        = sw3 ? 8'h80 : (raw_mode ? d_eff : byte1);
-    wire [7:0]  wr_row    = px_row[7:0];   // QVGA: 0-239 直接マッピング
-    wire [8:0]  wr_col    = px_col[8:0];   // QVGA: 0-319 直接マッピング
-    wire [16:0] waddr_next = ({1'b0, wr_row, 8'b0} + {3'b0, wr_row, 6'b0})
-                             + {8'b0, wr_col};
+    // 試験パターン (sw3=1): 灰色 (RGB565 で R=20, G=40, B=20 ≒ 0xA0) の地に, 中央 x=200〜439 / y=160〜319 の黒い四角。
+    //   黒い四角を含む行と含まない行で灰色の明るさが変わるかを見て、
+    //   行単位の輝度変動 (H サグ) がセンサ側か表示側 (PmodVGA / モニタ) かを切り分ける。
+    //   カメラのタイミングのまま FIFO → DDR3 → VGA の全経路を通る。
+    wire        pat_box   = (px_col >= 10'd200) && (px_col < 10'd440) &&
+                            (px_row >=  9'd160) && (px_row <  9'd320);
+    wire [15:0] pat_rgb   = pat_box ? 16'h0000 : {5'd20, 6'd40, 5'd20};
 
-    assign fb_wclk        = pclk;
+    // RGB565: 1 ピクセル = 2 バイト, 1 バイト目 = R[4:0] G[5:3], 2 バイト目 = G[2:0] B[4:0]
+    wire [15:0] rgb16     = sw3 ? pat_rgb : {byte1, d_eff};
+    wire        px_valid  = (px_col < CAM_W) && (px_row < CAM_H);
+
+    assign pix_clk        = pclk;
     assign dbg_pat_cnt    = pat_cnt;
     assign dbg_byte_phase = byte_phase;
     assign dbg_pat_b1     = byte1;
@@ -300,13 +329,14 @@ module ov7670_capture (
             byte1       <= 8'h00;
             px_col      <= 10'd0;
             px_row      <= 9'd0;
-            fb_we       <= 1'b0;
-            fb_waddr    <= 17'd0;
-            fb_wdata    <= 8'h00;
+            pix_we      <= 1'b0;
+            pix_sof     <= 1'b0;
+            pix_eol     <= 1'b0;
+            pix_rgb     <= 16'h0000;
             frame_start <= 1'b0;
             pat_cnt     <= 2'd0;
         end else begin
-            fb_we       <= 1'b0;
+            pix_we      <= 1'b0;
             frame_start <= 1'b0;
 
             case (state)
@@ -330,7 +360,7 @@ module ov7670_capture (
                 end
                 ST_CAPTURE: begin
                     if (!href) begin
-                        px_row  <= px_row + 1;
+                        if (px_row != 9'h1FF) px_row <= px_row + 1;
                         pat_cnt <= 2'd0;   // 次ライン先頭で pat_cnt=0 に揃える
                         state   <= ST_WAIT_HREF;
                     end else begin
@@ -339,12 +369,11 @@ module ov7670_capture (
                             byte_phase <= 1'b1;
                         end else begin
                             byte_phase <= 1'b0;
-                            begin
-                                fb_we    <= 1'b1;
-                                fb_waddr <= waddr_next;
-                                fb_wdata <= y8;
-                            end
-                            px_col  <= px_col + 1;
+                            pix_we  <= px_valid;
+                            pix_sof <= (px_col == 10'd0) && (px_row == 9'd0);
+                            pix_eol <= (px_col == CAM_W - 1);
+                            pix_rgb <= rgb16;
+                            if (px_col != 10'h3FF) px_col <= px_col + 1;
                             pat_cnt <= (pat_cnt == 2'd3) ? 2'd0 : pat_cnt + 1;
                         end
                     end
@@ -371,20 +400,66 @@ module ov7670_init #(
     output reg         init_done
 );
 
-    localparam REG_NUM = 10;
+    // OmniVision / Linux ov7670 ドライバの既定値のうち, アナログ・ADC・黒レベル補正
+    // (予約レジスタ) を追加している。PLL (DBLV 0x6B) と CLKRC は変えない (PCLK = XCLK のまま)。
+    localparam REG_NUM = 52;
     reg [15:0] init_rom [0:REG_NUM-1];
 
-    initial begin        
-        init_rom[0] = 16'h1280;
-        init_rom[1] = 16'hFFF0;
-        init_rom[2] = 16'h1210;  // COM7  : QVGA, YUV 出力
-        init_rom[3] = 16'h8c00;  // RGB444: 無効
-        init_rom[4] = 16'h40C0;  // COM15 : 出力レンジ 0x00-0xFF (RGB565 無効)
-        init_rom[5] = 16'h3A04;  // TSLB  : [3]=0 → YUYV 順 (COM13[0]=0 と組み合わせ)
-        init_rom[6] = 16'h3D80;  // COM13 : ガンマ有効, UV スワップなし
-        init_rom[7] = 16'hB084;
-        init_rom[8] = 16'h141A;  // COM9  : AGC ゲイン上限 4x ([6:4]=001), 予約ビットは初期値 0x4A のまま
-        init_rom[9] = 16'hFFFF;
+    initial begin
+        init_rom[0]  = 16'h1280;  // COM7  : ソフトリセット
+        init_rom[1]  = 16'hFFF0;  //         240 ms 待ち
+        init_rom[2]  = 16'h1204;  // COM7  : VGA (640×480), RGB 出力
+        init_rom[3]  = 16'h8c00;  // RGB444: 無効
+        init_rom[4]  = 16'h40D0;  // COM15 : RGB565, 出力レンジ 0x00-0xFF
+        init_rom[5]  = 16'h3A04;  // TSLB  : 既定値 (YUV のバイト順のみに関係)
+        init_rom[6]  = 16'h3DC0;  // COM13 : ガンマ有効, UV 彩度自動調整
+        init_rom[7]  = 16'h141A;  // COM9  : AGC ゲイン上限 4x ([6:4]=001), 予約ビットは初期値 0x4A のまま
+        init_rom[8]  = 16'h4FB3;  // MTX1  : 色変換マトリクス (RGB 出力用, Linux ov7670 ドライバの値)
+        init_rom[9]  = 16'h50B3;  // MTX2
+        init_rom[10] = 16'h5100;  // MTX3
+        init_rom[11] = 16'h523D;  // MTX4
+        init_rom[12] = 16'h53A7;  // MTX5
+        init_rom[13] = 16'h54E4;  // MTX6
+        init_rom[14] = 16'h589E;  // MTXS  : マトリクス符号 + 自動コントラスト中心
+        // ── 出力窓 (Linux ov7670 ドライバの VGA 設定: hstart=158, hstop=14, vstart=10, vstop=490) ──
+        init_rom[15] = 16'h1713;  // HSTART: 水平開始 [10:3] = 158>>3 (初期値 0x11 = 136 だと 22 画素早く始まり右寄りになる)
+        init_rom[16] = 16'h1801;  // HSTOP : 水平終了 [10:3] = 14>>3 (784 で折り返し)
+        init_rom[17] = 16'h32B6;  // HREF  : [7:6]=エッジオフセット 2, [5:3]=HSTOP[2:0]=6, [2:0]=HSTART[2:0]=6
+        init_rom[18] = 16'h1902;  // VSTRT : 垂直開始 [9:2] = 10>>2
+        init_rom[19] = 16'h1A7A;  // VSTOP : 垂直終了 [9:2] = 490>>2
+        init_rom[20] = 16'h030A;  // VREF  : [3:2]=VSTOP[1:0]=2, [1:0]=VSTRT[1:0]=2
+        // ── アナログ / ADC / 予約レジスタ (推奨値) ──
+        init_rom[21] = 16'h0E61;  // COM5  (予約)
+        init_rom[22] = 16'h0F4B;  // COM6  : 予約 + フォーマット変更時に BLC リセット
+        init_rom[23] = 16'h1602;  // 予約
+        init_rom[24] = 16'h1E07;  // MVFP  : ミラー/フリップなし, 下位は推奨値
+        init_rom[25] = 16'h2102;  // ADCCTR1
+        init_rom[26] = 16'h2291;  // ADCCTR2
+        init_rom[27] = 16'h2907;  // 予約
+        init_rom[28] = 16'h330B;  // CHLF  : アレイ電流制御
+        init_rom[29] = 16'h350B;  // 予約
+        init_rom[30] = 16'h371D;  // ADC   : ADC 制御
+        init_rom[31] = 16'h3871;  // ACOM  : ADC / アナログ共通
+        init_rom[32] = 16'h392A;  // OFON  : ADC オフセット
+        init_rom[33] = 16'h3C78;  // COM12 : VSYNC Low 中は HREF を出さない
+        init_rom[34] = 16'h4D40;  // 予約
+        init_rom[35] = 16'h4E20;  // 予約
+        init_rom[36] = 16'h6900;  // GFIX  : 固定ゲイン 1x
+        init_rom[37] = 16'h7410;  // REG74 : デジタルゲインは VREF[7:6] で制御
+        init_rom[38] = 16'h8D4F;  // 予約
+        init_rom[39] = 16'h8E00;  // 予約
+        init_rom[40] = 16'h8F00;  // 予約
+        init_rom[41] = 16'h9000;  // 予約
+        init_rom[42] = 16'h9100;  // 予約
+        init_rom[43] = 16'h9600;  // 予約
+        init_rom[44] = 16'h9A00;  // 予約
+        init_rom[45] = 16'hB084;  // 予約
+        init_rom[46] = 16'hB10C;  // ABLC1 : 自動黒レベル補正 有効
+        init_rom[47] = 16'hB20E;  // 予約
+        init_rom[48] = 16'hB382;  // THL_ST: ABLC 目標値
+        init_rom[49] = 16'hB80A;  // 予約
+        init_rom[50] = 16'hFFFF;  // 終端
+        init_rom[51] = 16'hFFFF;
     end
 
     localparam DELAY_1MS = SYS_CLK_HZ / 1000;
