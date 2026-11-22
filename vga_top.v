@@ -91,7 +91,11 @@ module vga_top (
 
     // ── USB-UART (FT2232H, 115200 bps) ───────────────────
     input  wire        uart_txd_in,  // PC → FPGA
-    output wire        uart_rxd_out  // FPGA → PC
+    output wire        uart_rxd_out, // FPGA → PC
+
+    // ── QSPI フラッシュ (MT25QL128, SCK は STARTUPE2 経由で CCLK) ──
+    inout  wire [3:0]  qspi_dq,      // [0] MOSI, [1] MISO, [2] WP#, [3] HOLD#
+    inout  wire        qspi_cs
 );
 
     // =========================================================================
@@ -167,6 +171,11 @@ module vga_top (
 
     // ── Ethernet / UART (eth_bd.tcl) ──
     wire        mdio_i, mdio_o, mdio_t;
+
+    // ── QSPI (qspi_bd.tcl) ──
+    wire        qspi_io0_i, qspi_io0_o, qspi_io0_t;
+    wire        qspi_io1_i, qspi_io1_o, qspi_io1_t;
+    wire        qspi_ss_i,  qspi_ss_o,  qspi_ss_t;
 
     fb_test fb_test_i (
         .CLK                 (clk100),
@@ -247,8 +256,25 @@ module vga_top (
         .MDIO_mdio_t         (mdio_t),
         // ── USB-UART (AXI UARTLite, eth_bd.tcl で追加) ──
         .UART_rxd            (uart_txd_in),
-        .UART_txd            (uart_rxd_out)
+        .UART_txd            (uart_rxd_out),
+        // ── QSPI フラッシュ (AXI Quad SPI XIP, qspi_bd.tcl で追加) ──
+        .SPI_0_io0_i         (qspi_io0_i),
+        .SPI_0_io0_o         (qspi_io0_o),
+        .SPI_0_io0_t         (qspi_io0_t),
+        .SPI_0_io1_i         (qspi_io1_i),
+        .SPI_0_io1_o         (qspi_io1_o),
+        .SPI_0_io1_t         (qspi_io1_t),
+        .SPI_0_ss_i          (qspi_ss_i),
+        .SPI_0_ss_o          (qspi_ss_o),
+        .SPI_0_ss_t          (qspi_ss_t)
     );
+
+    // QSPI: 標準 SPI (x1) で使うので DQ2 (WP#) / DQ3 (HOLD#) は常に 1
+    IOBUF u_qspi_io0 (.I(qspi_io0_o), .O(qspi_io0_i), .T(qspi_io0_t), .IO(qspi_dq[0]));
+    IOBUF u_qspi_io1 (.I(qspi_io1_o), .O(qspi_io1_i), .T(qspi_io1_t), .IO(qspi_dq[1]));
+    IOBUF u_qspi_ss  (.I(qspi_ss_o),  .O(qspi_ss_i),  .T(qspi_ss_t),  .IO(qspi_cs));
+    assign qspi_dq[2] = 1'b1;
+    assign qspi_dq[3] = 1'b1;
 
     // MDIO (双方向, オープンドレインではなく T で Hi-Z 制御)
     IOBUF u_mdio_iobuf (.I(mdio_o), .O(mdio_i), .T(mdio_t), .IO(eth_mdio));

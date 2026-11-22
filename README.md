@@ -165,6 +165,8 @@ clk_wiz_0 はトップの BUFG 出力を受けるため `PRIM_SOURCE = Global_bu
 | MicroBlaze-V (D) | axi_timer_0 | 0x41C0_0000 | 64 KB |
 | MicroBlaze-V / axi_vip / S_AXI_CFG | axi_vdma_0 S_AXI_LITE | 0x44A0_0000 | 64 KB |
 | MicroBlaze-V / axi_vip / S_AXI_CFG | v_tpg_0 s_axi_CTRL | 0x44A1_0000 | 64 KB |
+| MicroBlaze-V (D) | axi_quad_spi_0 AXI_LITE (XIP 設定) | 0x44A2_0000 | 64 KB |
+| MicroBlaze-V (D) | axi_quad_spi_0 AXI_FULL (XIP 読み出し = フラッシュ 0x00_0000〜) | 0x6000_0000 | 16 MB |
 | MicroBlaze-V (I/D キャッシュ) | MIG (DDR3) | 0x8000_0000 | 128 MB |
 | axi_vdma_0 (MM2S/S2MM) | MIG (DDR3) | 0x8000_0000 | 128 MB |
 
@@ -188,6 +190,9 @@ DDR3 の使い方: 0x8000_0000 + n × 1 MB (n = 0〜7) に 900 KB (640×480×3) 
   - axi_timer_0 (lwIP の周期処理), axi_uartlite_0 (115200 bps, 8N1)
   - axi_intc_0: intr[0] = EthernetLite, intr[1] = Timer → MicroBlaze-V INTERRUPT
   - 外部ポート `MII_*` / `MDIO_{mdc, mdio_i, mdio_o, mdio_t}` / `UART_{rxd, txd}` (MDIO の IOBUF は vga_top)
+- QSPI ブート用 (`qspi_bd.tcl` で追加):
+  - axi_quad_spi_0: XIP モード, 標準 SPI (x1), Micron, STARTUPE2 内蔵 (SCK = CCLK)。AXI は SYSCLK 100 MHz、ext_spi_clk = clk_wiz_0/pclk 25 MHz → SCK 12.5 MHz
+  - 外部ポート `SPI_0_{io0, io1, ss}_{i, o, t}` (IOBUF は vga_top)
 
 ### cam_ddr による自動設定 (MIG キャリブ完了の約 10 µs 後に 1 回)
 
@@ -282,7 +287,10 @@ DDR3 のピン配置と IOSTANDARD は MIG IP の XDC が付与する。
 | eth_txd[3:0] | H17, J13, J14, H14 | eth_col / eth_crs | D17 / G14 |
 | eth_mdc / eth_mdio | F16 / K13 | uart_txd_in (PC→FPGA) / uart_rxd_out (FPGA→PC) | A9 / D10 |
 
+| qspi_cs | L13 | qspi_dq[3:0] | M14, L14, K18, K17 |
+
 - eth_ref_clk は vga_top の MMCM の 25 MHz (pclk) を ODDR でピンに出す
+- QSPI フラッシュ (Micron MT25QL128, 16 MB): SCK は CCLK (E9) で STARTUPE2 経由。標準 SPI (x1) で使うので DQ2 (WP#) / DQ3 (HOLD#) は vga_top から常に 1 を出す
 - PHY の MDIO アドレスは 1 (Arty の既定)
 
 ---
@@ -299,6 +307,8 @@ DDR3 のピン配置と IOSTANDARD は MIG IP の XDC が付与する。
 | dbg_hub | 入力 100 MHz, 分周なし, `connect_debug_port dbg_hub/clk [get_nets clk100]` |
 
 Ethernet 追加後の実装 (2026-11-21, プロジェクトのコピーで確認): WNS -0.081 ns / WHS +0.015 ns。違反は MIG 内部 (u_ddr_phy_init, clk_pll_i 6 ns) の 1 パスだけで、以前から出ているもの (前回 -0.190 ns)。SYSCLK +0.98 ns, eth_rx_clk / eth_tx_clk は余裕あり。MIG のクロック設定見直しは今後の課題。
+
+QSPI (axi_quad_spi_0) 追加後の実装 (2026-11-22): WNS -0.010 ns / WHS +0.023 ns、SYSCLK +0.011 ns。違反は MIG 内部 (u_ddr_phy_init) の 1 パスだけ。
 
 キャッシュを各 32 KB / ライン 8 ワードにした後の実装 (2026-11-22): 既定の strategy では SYSCLK が -0.265 ns (MicroBlaze-V 内部の 22 パス) で満たせなかったため、impl_1 の strategy を **Performance_ExplorePostRoutePhysOpt** に変更。WNS -0.063 ns / WHS +0.020 ns、SYSCLK +0.095 ns。違反は上と同じ MIG 内部 (u_ddr_phy_init) の 1 パスだけ。BRAM 32.5 / 50 タイル。
 
@@ -374,6 +384,8 @@ xsim cam_ddr_tb -R
 
 ## ビルド手順
 
+ソースからフラッシュ書き込みまでの通しの手順は [BUILD.md](BUILD.md) にまとめた。
+
 1. Vivado で `vga_camera.xpr` を開く
 2. インクリメンタルコンパイルを無効化 (BASIC ライセンスでは 12-29181 エラーになるため。初回のみ):
    ```tcl
@@ -393,7 +405,7 @@ xsim cam_ddr_tb -R
    ```
 5. Hardware Manager でボードに書き込み (USB-JTAG。リモートの場合はボード側 PC で hw_server を起動し `<ホスト名>:3121` に接続)
 
-合成の前に一度 `source {D:/xlinix/vga_camera/cam_ddr_bd.tcl}` を実行し、続けて `source {D:/xlinix/vga_camera/eth_bd.tcl}` を実行する (Ethernet / UART / キャッシュの追加。何度実行してもよい)。fb_test にカメラ用ポートを追加し、cam_ddr.v を追加、廃止した fb_reader.v / vga_mono.v をプロジェクトから外す (何度実行してもよい)。
+合成の前に一度 `source {D:/xlinix/vga_camera/cam_ddr_bd.tcl}` を実行し、続けて `source {D:/xlinix/vga_camera/eth_bd.tcl}` (Ethernet / UART / キャッシュの追加)、`source {D:/xlinix/vga_camera/qspi_bd.tcl}` (QSPI ブート用の AXI Quad SPI) を実行する (どれも何度実行してもよい)。fb_test にカメラ用ポートを追加し、cam_ddr.v を追加、廃止した fb_reader.v / vga_mono.v をプロジェクトから外す (何度実行してもよい)。
 fb_test の配線を作り直す場合は `source {D:/xlinix/vga_camera/fix_fb_test_bd.tcl}` を実行し、その後 `cam_ddr_bd.tcl` をもう一度実行する。
 
 ### ファームウェア (MicroBlaze-V, Vitis 2026.1)
@@ -404,11 +416,13 @@ fb_test の配線を作り直す場合は `source {D:/xlinix/vga_camera/fix_fb_t
 |------|------|
 | `sw/export_xsa.tcl` | 実装結果 (ビットストリーム込み) を `firmware/vga_top.xsa` に出力 |
 | `sw/build_fw.py` | プラットフォーム `vga_plat` (standalone + lwip220 RAW API, DHCP) とアプリ `vga_web` を作成してビルド。アプリは lwip_echo_server テンプレート (プラットフォーム / lwIP 初期化) を土台に `sw/src` で上書きし、テンプレートの echo.c は `sw/src` の main.c / platform.c 以外の .c (http_server.c, frame.c) に差し替える。lwIP は送信バッファ 64 KB、コピーなし送信用の pbuf 1024 個 |
-| `sw/src/main.c` | テンプレートの main.c を置き換え。xemac_add の前に MDIO で PHY (ID / BMSR) を読み、リンクを最大 10 秒待って UART に表示 (lwIP のドライバはオートネゴ完了を無期限に待つため、リンクが無いと無言で止まる) |
+| `sw/src/main.c` | テンプレートの main.c を置き換え。xemac_add の前に MDIO で PHY (ID / BMSR) を読み、リンクを最大 10 秒待って UART に表示 (lwIP のドライバはオートネゴ完了を無期限に待つため、リンクが無いと無言で止まる)。待ち時間は axi_timer_0 のカウンタで測る (`usleep()` は使えない。下の QSPI ブートのメモ) |
 | `sw/src/platform.c` | テンプレートの platform.c を置き換え。SDT 構成ではタイマー割り込みが xemac_add より前から動くため、xemac_add 完了 (`EthNetifReady`) まで `eth_link_detect` を呼ばない (未初期化の netif->state を参照して暴走するのを防ぐ)。時間計測用に 50 ms ごとの割り込み回数 (`PlatformTicks`) を数える |
 | `sw/src/frame.c` | VDMA の設定し直し (3 面 + genlock) とスナップショット。下の「テアリング対策」を参照 |
 | `sw/src/http_server.c` | Web サーバー (ポート 80, HTTP/1.0)。`/` は画像を連続で読み込み直す HTML 1 ページ、`/frame.bmp` は最新のカメラフレームのスナップショットを 24 bit BMP (640×480, 上から下の行順) にして返す。画素はコピーせず、フレームバッファを直接 lwIP に渡す (tcp_write の COPY なし)。Nagle は無効 |
-| `sw/run_fw.tcl` | xsdb で FPGA 書き込み → ELF を DDR3 にロードして実行 |
+| `sw/run_fw.tcl` | xsdb で FPGA 書き込み → ELF を DDR3 にロードして実行 (開発用。電源を切ると消える) |
+| `sw/boot/` | BRAM ブートローダ (start.S, boot.c, boot.ld)。下の「QSPI ブート」を参照 |
+| `sw/flash.tcl` | ブートローダのビルド → ビットストリームへの埋め込み → フラッシュイメージ作成 → QSPI フラッシュ書き込み → フラッシュから起動し直す |
 
 手順 (PowerShell, リポジトリ直下):
 
@@ -442,6 +456,39 @@ fb_test の配線を作り直す場合は `source {D:/xlinix/vga_camera/fix_fb_t
 - 送る直前の部分だけ、P の中でバイト順を G,B,R → B,G,R に直す (直した直後に lwIP がチェックサムを計算するので、まだキャッシュに乗っている)。送信が終わったら D キャッシュを書き戻して空きバッファに戻す
 - 50 ms 以内に来たリクエストは同じスナップショットを共有する。それ以外はリクエストごとに新しいフレームを確保する (空きバッファが無いときは最新のものを共有)
 
+### QSPI ブート (段階 5)
+
+電源投入 (または PROG ボタン) で、FPGA がフラッシュからコンフィグされ、Web サーバーまで自動で起動する。ボードのジャンパ JP1 は SPI (QSPI ブート) にしておく。
+
+フラッシュ (MT25QL128, 16 MB) の配置:
+
+| アドレス | 内容 |
+|------|------|
+| 0x00_0000 | ビットストリーム (圧縮, SPI x4, 33 MHz)。BRAM にブートローダ入り (`firmware/boot.bit`) |
+| 0x80_0000 | ファームウェアイメージ: ヘッダ 32 バイト (magic `VAGW`, ロード先, サイズ, エントリ, データのチェックサム, ヘッダのチェックサム) + vga_web.elf の LOAD セグメント (約 163 KB) |
+
+起動の流れ:
+
+1. FPGA がフラッシュからコンフィグされ、MicroBlaze-V がリセットベクタ 0x0 (LMB BRAM) からブートローダを実行
+2. ブートローダ (`sw/boot`, 約 1 KB, BSP なし) が XIP 窓 0x6080_0000 のヘッダを確かめ、データを DDR3 0x8100_0000 にコピーしてチェックサムを照合
+3. D キャッシュを書き戻し (BSP と同じ cbo.flush のインデックス指定) → I キャッシュ無効化 → エントリ 0x8100_0000 へジャンプ
+4. UART に `[boot] ...` が出たあと、いつものファームウェアの表示が続く
+
+更新手順 (ビットストリームかファームウェアを作り直したとき。PowerShell, リポジトリ直下, Vivado の Hardware Manager は閉じておく):
+
+```powershell
+C:\AMDDesignTools\2026.1\Vivado\bin\vivado.bat -mode batch -nojournal -nolog -source sw\flash.tcl
+```
+
+`-tclargs noprog` を付けると `firmware/flash.mcs` を作るだけで書き込まない。`firmware/vga_top.mmi` (BRAM の配置情報) は impl_1 から自動で書き出す。
+
+メモ:
+
+- フラッシュからのコンフィグ直後は、最初の XIP 読み出しが 0xFFFFFFFF になる (STARTUPE2 は USRCCLKO の最初の 3 クロックを無視するため、最初の SPI 転送が壊れる)。ブートローダはヘッダの magic が読めるまで空読みする (実機では 1 回)
+- xiltimer の sleep 用タイマーは CPU のサイクルカウンタだが、この MicroBlaze-V にはカウンタが無い (C_USE_COUNTERS = 0) ので `usleep()` は戻ってこない。JTAG 実行ではリンクが上がったままで `usleep()` を通らず気づかなかった。フラッシュ起動では PHY のリンクに約 2 秒かかり、ここで止まっていた
+- `sw/run_fw.tcl` (JTAG) は今までどおり使える (impl_1 のビットストリームはブートローダなしで、BRAM は `j 0` のまま)
+- 実機確認 (2026-11-22): `boot_hw_device` (PROG と同じ) でフラッシュから起動し、ブートローダ → ファームウェア → DHCP → `/frame.bmp` 取得まで確認
+
 ---
 
 ## 動作確認
@@ -465,4 +512,4 @@ fb_test の配線を作り直す場合は `source {D:/xlinix/vga_camera/fix_fb_t
 - RGB565 出力は実機未確認。色が入れ替わる (赤と青など) 場合は `ov7670_capture` の `rgb16` (バイト順) や `cam_ddr` の `rgb565_axis` を見直す。色味・彩度は色変換マトリクス (0x4F–0x58) と AWB の調整が必要な場合がある
 - カメラ (約 30 fps) と表示 (60 Hz) は非同期で、同じフレームを 2 回読む
 - ファームウェアなしではフレームバッファが 1 面のため、速い動きでテアリングが出る (ファームウェアが 3 面 + genlock に設定し直す)
-- Web の画像取得は 1 フレーム約 0.78 秒。SYSCLK (100 MHz) は MicroBlaze-V のキャッシュ拡大で余裕が小さく (+0.095 ns)、Performance_ExplorePostRoutePhysOpt でやっと満たしている。BD を変えたらタイミングを確認すること
+- Web の画像取得は 1 フレーム約 0.78 秒。SYSCLK (100 MHz) は MicroBlaze-V のキャッシュ拡大で余裕が小さく (QSPI 追加後 +0.011 ns)、Performance_ExplorePostRoutePhysOpt でやっと満たしている。BD を変えたらタイミングを確認すること

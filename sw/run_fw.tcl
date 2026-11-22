@@ -4,7 +4,7 @@
 #   Run (PowerShell, repository root):
 #     C:\AMDDesignTools\2026.1\Vitis\bin\xsdb.bat sw\run_fw.tcl
 #   * Close Hardware Manager in Vivado first (Close Hardware Manager / Close Target)
-#   * The program goes into DDR3, so it is lost at power off (boot from flash is stage 5)
+#   * The program goes into DDR3, so it is lost at power off (to boot from flash, use sw/flash.tcl)
 # =============================================================================
 set root [file dirname [file dirname [file normalize [info script]]]]
 set bit  $root/vga_camera.runs/impl_1/vga_top.bit

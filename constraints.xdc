@@ -139,6 +139,14 @@ set_property PACKAGE_PIN A9       [get_ports uart_txd_in]
 set_property PACKAGE_PIN D10      [get_ports uart_rxd_out]
 set_property IOSTANDARD  LVCMOS33 [get_ports {uart_txd_in uart_rxd_out}]
 
+# ── QSPI フラッシュ (MT25QL128) ── SCK は CCLK (E9, STARTUPE2 経由なのでピン指定なし)
+set_property PACKAGE_PIN L13      [get_ports qspi_cs]
+set_property PACKAGE_PIN K17      [get_ports {qspi_dq[0]}]
+set_property PACKAGE_PIN K18      [get_ports {qspi_dq[1]}]
+set_property PACKAGE_PIN L14      [get_ports {qspi_dq[2]}]
+set_property PACKAGE_PIN M14      [get_ports {qspi_dq[3]}]
+set_property IOSTANDARD  LVCMOS33 [get_ports {qspi_cs qspi_dq[*]}]
+
 ## MII の送受信クロック (PHY 出力, 100 Mbps 時 25 MHz)
 create_clock -period 40.000 -name eth_rx_clk [get_ports eth_rx_clk]
 create_clock -period 40.000 -name eth_tx_clk [get_ports eth_tx_clk]

@@ -130,6 +130,41 @@ int IicPhyReset(void);
  * ------------------------------------------------------------------------- */
 static XEmacLite phy_el;
 
+/* Busy wait using counter 0 of axi_timer_0 (100 MHz, the 50 ms tick timer set up
+ * by init_platform). usleep() cannot be used: xiltimer's sleep timer is the CPU
+ * cycle counter, which this MicroBlaze-V does not have (C_USE_COUNTERS = 0), so
+ * usleep() never returns. Works with interrupts still disabled. */
+#define TMR_BASE   0x41C00000u
+#define TMR_TCSR0  (TMR_BASE + 0x0)
+#define TMR_TLR0   (TMR_BASE + 0x4)
+#define TMR_TCR0   (TMR_BASE + 0x8)
+#define TMR_UDT0   0x02
+#define TMR_ENT0   0x80
+
+static void delay_us(u32 us)
+{
+	u32 csr = Xil_In32(TMR_TCSR0), load = Xil_In32(TMR_TLR0);
+	int down = (csr & TMR_UDT0) != 0;
+	u32 period = down ? load + 1 : 0u - load;   /* counts per reload cycle */
+	u32 need = us * 100, acc = 0, prev, c, d;
+	volatile u32 spin;
+
+	if (!(csr & TMR_ENT0) || period == 0) {     /* timer not running: rough loop */
+		for (spin = 0; spin < us * 20; spin++)
+			;
+		return;
+	}
+	prev = Xil_In32(TMR_TCR0);
+	while (acc < need) {
+		c = Xil_In32(TMR_TCR0);
+		d = down ? prev - c : c - prev;
+		if (d >= period)                         /* reloaded in between */
+			d += period;
+		acc += d;
+		prev = c;
+	}
+}
+
 static int phy_diag(void)
 {
 	XEmacLite_Config *cfg = XEmacLite_LookupConfig(PLATFORM_EMAC_BASEADDR);
@@ -164,7 +199,7 @@ static int phy_diag(void)
 			break;
 		if (i % 10 == 0)
 			xil_printf("[phy] waiting for link... BMSR=%04x\r\n", bmsr);
-		usleep(100000);
+		delay_us(100000);
 	}
 	if ((bmsr & 0x0024) != 0x0024) {
 		xil_printf("[phy] no link after 10 s (BMSR=%04x)\r\n", bmsr);

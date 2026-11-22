@@ -413,6 +413,43 @@
             },
             "V15": {
                 "VT": "AC",
+                "BA": "0x44A20000",
+                "HA": "0x44A2FFFF",
+                "BP": "C_BASEADDR",
+                "HP": "C_HIGHADDR",
+                "MA": "Data",
+                "MX": "/microblaze_riscv_0",
+                "MI": "M_AXI_DP",
+                "MS": "SEG_axi_quad_spi_0_Reg",
+                "MV": "xilinx.com:ip:microblaze_riscv:1.0",
+                "SX": "/axi_quad_spi_0",
+                "SI": "AXI_LITE",
+                "SS": "Reg",
+                "SV": "xilinx.com:ip:axi_quad_spi:3.2",
+                "TM": "data",
+                "TU": "register"
+            },
+            "V16": {
+                "VT": "AC",
+                "BA": "0x60000000",
+                "HA": "0x60FFFFFF",
+                "BP": "C_S_AXI4_BASEADDR",
+                "HP": "C_S_AXI4_HIGHADDR",
+                "MA": "Data",
+                "MX": "/microblaze_riscv_0",
+                "MI": "M_AXI_DP",
+                "MS": "SEG_axi_quad_spi_0_MEM0",
+                "MV": "xilinx.com:ip:microblaze_riscv:1.0",
+                "SX": "/axi_quad_spi_0",
+                "SI": "AXI_FULL",
+                "MM": "aximm",
+                "SS": "MEM0",
+                "SV": "xilinx.com:ip:axi_quad_spi:3.2",
+                "TM": "data",
+                "TU": "register"
+            },
+            "V17": {
+                "VT": "AC",
                 "BA": "0x80000000",
                 "HA": "0x87FFFFFF",
                 "BP": "C_BASEADDR",
@@ -430,7 +467,7 @@
                 "TM": "both",
                 "TU": "memory"
             },
-            "V16": {
+            "V18": {
                 "VT": "AC",
                 "BA": "0x80000000",
                 "HA": "0x87FFFFFF",
@@ -449,7 +486,7 @@
                 "TM": "both",
                 "TU": "memory"
             },
-            "V17": {
+            "V19": {
                 "VT": "AC",
                 "BA": "0x80000000",
                 "HA": "0x87FFFFFF",
@@ -468,7 +505,7 @@
                 "TM": "data",
                 "TU": "memory"
             },
-            "V18": {
+            "V20": {
                 "VT": "AC",
                 "BA": "0x80000000",
                 "HA": "0x87FFFFFF",
@@ -487,7 +524,7 @@
                 "TM": "instruction",
                 "TU": "memory"
             },
-            "V19": {
+            "V21": {
                 "VT": "ACE",
                 "BA": "0x00000000",
                 "HA": "0x00000000",
@@ -505,7 +542,7 @@
                 "TM": "both",
                 "TU": "register"
             },
-            "V20": {
+            "V22": {
                 "VT": "ACE",
                 "BA": "0x00000000",
                 "HA": "0x00000000",
@@ -524,7 +561,44 @@
                 "TM": "both",
                 "TU": "register"
             },
-            "V21": {
+            "V23": {
+                "VT": "ACE",
+                "BA": "0x00000000",
+                "HA": "0x00000000",
+                "BP": "C_S_AXI4_BASEADDR",
+                "HP": "C_S_AXI4_HIGHADDR",
+                "MA": "S_AXI_CFG",
+                "MX": "/",
+                "MI": "S_AXI_CFG",
+                "MS": "SEG_axi_quad_spi_0_MEM0",
+                "MV": ":::",
+                "SX": "/axi_quad_spi_0",
+                "SI": "AXI_FULL",
+                "MM": "aximm",
+                "SS": "MEM0",
+                "SV": "xilinx.com:ip:axi_quad_spi:3.2",
+                "TM": "both",
+                "TU": "register"
+            },
+            "V24": {
+                "VT": "ACE",
+                "BA": "0x00000000",
+                "HA": "0x00000000",
+                "BP": "C_BASEADDR",
+                "HP": "C_HIGHADDR",
+                "MA": "S_AXI_CFG",
+                "MX": "/",
+                "MI": "S_AXI_CFG",
+                "MS": "SEG_axi_quad_spi_0_Reg",
+                "MV": ":::",
+                "SX": "/axi_quad_spi_0",
+                "SI": "AXI_LITE",
+                "SS": "Reg",
+                "SV": "xilinx.com:ip:axi_quad_spi:3.2",
+                "TM": "both",
+                "TU": "register"
+            },
+            "V25": {
                 "VT": "ACE",
                 "BA": "0x00000000",
                 "HA": "0x00000000",
@@ -542,7 +616,7 @@
                 "TM": "both",
                 "TU": "register"
             },
-            "V22": {
+            "V26": {
                 "VT": "ACE",
                 "BA": "0x00000000",
                 "HA": "0x00000000",
@@ -560,7 +634,7 @@
                 "TM": "both",
                 "TU": "register"
             },
-            "V23": {
+            "V27": {
                 "VT": "ACE",
                 "BA": "0x00000000",
                 "HA": "0x00000000",
@@ -578,7 +652,7 @@
                 "TM": "both",
                 "TU": "register"
             },
-            "V24": {
+            "V28": {
                 "VT": "ACE",
                 "BA": "0x00000000",
                 "HA": "0x00000000",
@@ -597,7 +671,44 @@
                 "TM": "both",
                 "TU": "register"
             },
-            "V25": {
+            "V29": {
+                "VT": "ACE",
+                "BA": "0x00000000",
+                "HA": "0x00000000",
+                "BP": "C_S_AXI4_BASEADDR",
+                "HP": "C_S_AXI4_HIGHADDR",
+                "MA": "Master_AXI",
+                "MX": "/axi_vip_0",
+                "MI": "M_AXI",
+                "MS": "SEG_axi_quad_spi_0_MEM0",
+                "MV": "xilinx.com:ip:axi_vip:1.1",
+                "SX": "/axi_quad_spi_0",
+                "SI": "AXI_FULL",
+                "MM": "aximm",
+                "SS": "MEM0",
+                "SV": "xilinx.com:ip:axi_quad_spi:3.2",
+                "TM": "both",
+                "TU": "register"
+            },
+            "V30": {
+                "VT": "ACE",
+                "BA": "0x00000000",
+                "HA": "0x00000000",
+                "BP": "C_BASEADDR",
+                "HP": "C_HIGHADDR",
+                "MA": "Master_AXI",
+                "MX": "/axi_vip_0",
+                "MI": "M_AXI",
+                "MS": "SEG_axi_quad_spi_0_Reg",
+                "MV": "xilinx.com:ip:axi_vip:1.1",
+                "SX": "/axi_quad_spi_0",
+                "SI": "AXI_LITE",
+                "SS": "Reg",
+                "SV": "xilinx.com:ip:axi_quad_spi:3.2",
+                "TM": "both",
+                "TU": "register"
+            },
+            "V31": {
                 "VT": "ACE",
                 "BA": "0x00000000",
                 "HA": "0x00000000",
@@ -615,7 +726,7 @@
                 "TM": "both",
                 "TU": "register"
             },
-            "V26": {
+            "V32": {
                 "VT": "ACE",
                 "BA": "0x00000000",
                 "HA": "0x00000000",
@@ -760,6 +871,36 @@
             },
             {
                 "src": "V26",
+                "trg": "V2",
+                "EH": "2"
+            },
+            {
+                "src": "V27",
+                "trg": "V2",
+                "EH": "2"
+            },
+            {
+                "src": "V28",
+                "trg": "V2",
+                "EH": "2"
+            },
+            {
+                "src": "V29",
+                "trg": "V2",
+                "EH": "2"
+            },
+            {
+                "src": "V30",
+                "trg": "V2",
+                "EH": "2"
+            },
+            {
+                "src": "V31",
+                "trg": "V2",
+                "EH": "2"
+            },
+            {
+                "src": "V32",
                 "trg": "V2",
                 "EH": "2"
             }
