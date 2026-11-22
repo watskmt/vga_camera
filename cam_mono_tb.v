@@ -234,8 +234,17 @@ module fb_test (
     input  wire S_AXI_CFG_bready,
     input  wire [31:0] S_AXI_CFG_araddr, input wire S_AXI_CFG_arvalid, output wire S_AXI_CFG_arready,
     output wire [31:0] S_AXI_CFG_rdata, output wire [1:0] S_AXI_CFG_rresp, output wire S_AXI_CFG_rvalid,
-    input  wire S_AXI_CFG_rready
+    input  wire S_AXI_CFG_rready,
+    // Ethernet / UART (eth_bd.tcl)
+    input  wire MII_col, input wire MII_crs, output wire MII_rst_n, input wire MII_rx_clk,
+    input  wire MII_rx_dv, input wire MII_rx_er, input wire [3:0] MII_rxd, input wire MII_tx_clk,
+    output wire MII_tx_en, output wire [3:0] MII_txd,
+    output wire MDIO_mdc, input wire MDIO_mdio_i, output wire MDIO_mdio_o, output wire MDIO_mdio_t,
+    input  wire UART_rxd, output wire UART_txd
 );
+    assign MII_rst_n = 1'b1; assign MII_tx_en = 1'b0; assign MII_txd = 4'h0;
+    assign MDIO_mdc = 1'b0; assign MDIO_mdio_o = 1'b1; assign MDIO_mdio_t = 1'b1;
+    assign UART_txd = 1'b1;
     assign RGB = {8'hC8, 8'h30, 8'hFF};    // AXI4-Stream Video 順 {R, B, G} assign HSYNC = 1'b0; assign VSYNC = 1'b0;
     assign HSYNC_1 = 1'b0; assign VSYNC_1 = 1'b0; assign status = 32'h0;
 

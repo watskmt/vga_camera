@@ -112,6 +112,38 @@ set_property PACKAGE_PIN J18      [get_ports vga_vs]      ;# JB pin8
 set_property IOSTANDARD  LVCMOS33 [get_ports {vga_g[*] vga_hs vga_vs}]
 
 ## =============================================================================
+## Ethernet PHY (TI DP83848J, MII) / USB-UART  (Digilent Arty-A7-35 Master XDC)
+## =============================================================================
+set_property PACKAGE_PIN G18      [get_ports eth_ref_clk]
+set_property PACKAGE_PIN C16      [get_ports eth_rstn]
+set_property PACKAGE_PIN H16      [get_ports eth_tx_clk]
+set_property PACKAGE_PIN H15      [get_ports eth_tx_en]
+set_property PACKAGE_PIN H14      [get_ports {eth_txd[0]}]
+set_property PACKAGE_PIN J14      [get_ports {eth_txd[1]}]
+set_property PACKAGE_PIN J13      [get_ports {eth_txd[2]}]
+set_property PACKAGE_PIN H17      [get_ports {eth_txd[3]}]
+set_property PACKAGE_PIN F15      [get_ports eth_rx_clk]
+set_property PACKAGE_PIN G16      [get_ports eth_rx_dv]
+set_property PACKAGE_PIN C17      [get_ports eth_rxerr]
+set_property PACKAGE_PIN D18      [get_ports {eth_rxd[0]}]
+set_property PACKAGE_PIN E17      [get_ports {eth_rxd[1]}]
+set_property PACKAGE_PIN E18      [get_ports {eth_rxd[2]}]
+set_property PACKAGE_PIN G17      [get_ports {eth_rxd[3]}]
+set_property PACKAGE_PIN D17      [get_ports eth_col]
+set_property PACKAGE_PIN G14      [get_ports eth_crs]
+set_property PACKAGE_PIN F16      [get_ports eth_mdc]
+set_property PACKAGE_PIN K13      [get_ports eth_mdio]
+set_property IOSTANDARD  LVCMOS33 [get_ports {eth_*}]
+
+set_property PACKAGE_PIN A9       [get_ports uart_txd_in]
+set_property PACKAGE_PIN D10      [get_ports uart_rxd_out]
+set_property IOSTANDARD  LVCMOS33 [get_ports {uart_txd_in uart_rxd_out}]
+
+## MII の送受信クロック (PHY 出力, 100 Mbps 時 25 MHz)
+create_clock -period 40.000 -name eth_rx_clk [get_ports eth_rx_clk]
+create_clock -period 40.000 -name eth_tx_clk [get_ports eth_tx_clk]
+
+## =============================================================================
 ## タイミング例外
 ## =============================================================================
 ## cam_pclk は sys_clk / pclk_mmcm と非同期クロックドメイン
@@ -122,7 +154,9 @@ set_property IOSTANDARD  LVCMOS33 [get_ports {vga_g[*] vga_hs vga_vs}]
 ##   みなし Critical Warning が発生する。
 set_clock_groups -asynchronous \
     -group [get_clocks -include_generated_clocks sys_clk] \
-    -group [get_clocks -include_generated_clocks cam_pclk]
+    -group [get_clocks -include_generated_clocks cam_pclk] \
+    -group [get_clocks eth_rx_clk] \
+    -group [get_clocks eth_tx_clk]
 
 # =============================================================================
 # DDR3 キャリブ完了信号 (MIG ui_clk) → pclk 同期化 FF 1 段目は非同期

@@ -30,4 +30,4 @@ Thumbs.db
 *.mcs
 *.prm
 *.log
-firmware/_ide/
+firmware/

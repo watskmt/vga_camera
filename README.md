@@ -104,6 +104,7 @@ clk_wiz_0 はトップの BUFG 出力を受けるため `PRIM_SOURCE = Global_bu
 | `fix_fb_test_bd.tcl` | — | fb_test の内部配線・IP 設定・アドレス割り当てを作り直す |
 | `fix_fb_test_clk.tcl` | — | clk_wiz_0 の PRIM_SOURCE を Global_buffer に設定 |
 | `cam_ddr_bd.tcl` | — | fb_test にカメラ用ポート (S_AXIS_VID / M_AXIS_TPG / S_AXI_CFG / SYSCLK / SYSRST_N) を追加, 廃止したソースをプロジェクトから外す |
+| `eth_bd.tcl` | — | fb_test に AXI EthernetLite (MII) / Timer / INTC / UARTLite を追加し、MicroBlaze-V のキャッシュを DDR3 につなぐ (Ethernet / Web サーバー用) |
 | `ov_sccb_tb.v` | `ov_sccb_tb` | ov7670_if の SCCB シーケンス (初期化 ROM / 0x70・0x71 / SW2 の COM8) のテストベンチ |
 | `cam_ddr_tb.v` | `cam_ddr_tb` | cam_ddr のテストベンチ (等倍 / 2 倍拡大 / 切替 / レジスタ設定) |
 | `cam_mono_tb.v` | `cam_mono_tb` | vga_top 全体 (OV7670 モデル → S_AXIS_VID, VGA 出力) のテストベンチ (fb_test / ila_cam はスタブ) |
@@ -158,9 +159,16 @@ clk_wiz_0 はトップの BUFG 出力を受けるため `PRIM_SOURCE = Global_bu
 | マスタ | スレーブ | オフセット | サイズ |
 |--------|----------|-----------|--------|
 | MicroBlaze-V (I/D) | LMB BRAM | 0x0000_0000 | 16 KB |
+| MicroBlaze-V (D) | axi_uartlite_0 | 0x4060_0000 | 64 KB |
+| MicroBlaze-V (D) | axi_ethernetlite_0 | 0x40E0_0000 | 64 KB |
+| MicroBlaze-V (D) | axi_intc_0 | 0x4120_0000 | 64 KB |
+| MicroBlaze-V (D) | axi_timer_0 | 0x41C0_0000 | 64 KB |
 | MicroBlaze-V / axi_vip / S_AXI_CFG | axi_vdma_0 S_AXI_LITE | 0x44A0_0000 | 64 KB |
 | MicroBlaze-V / axi_vip / S_AXI_CFG | v_tpg_0 s_axi_CTRL | 0x44A1_0000 | 64 KB |
+| MicroBlaze-V (I/D キャッシュ) | MIG (DDR3) | 0x8000_0000 | 128 MB |
 | axi_vdma_0 (MM2S/S2MM) | MIG (DDR3) | 0x8000_0000 | 128 MB |
+
+DDR3 の使い方: 0x8000_0000 + n × 1 MB (n = 0〜7) に 900 KB (640×480×3) のフレームバッファを 8 面 (ファームウェア実行時。ファームウェアなしでは 0x8000_0000 の 1 面だけ)。MicroBlaze-V のプログラム・ヒープは 0x8100_0000 以降に置く。
 
 ### 主な設定
 
@@ -174,6 +182,12 @@ clk_wiz_0 はトップの BUFG 出力を受けるため `PRIM_SOURCE = Global_bu
   - `S_AXI_CFG`: RTL の設定ステートマシンから smartconnect_0 (S02) 経由で VDMA / TPG へ
   - `SYSCLK` / `SYSRST_N`: 上記のクロックとリセット (proc_sys_reset_0/peripheral_aresetn)
   - `ACTIVE_VIDEO`: v_axi4s_vid_out_0/vid_active_video (BD pclk, RGB と同位相)
+- Ethernet / CPU まわり (`eth_bd.tcl` で追加, すべて SYSCLK 100 MHz):
+  - MicroBlaze-V: 命令 / データキャッシュ 各 32 KB, ライン 8 ワード (データはライトバック, 範囲 0x8000_0000〜0x87FF_FFFF) を有効化し、M_AXI_IC / M_AXI_DC を smartconnect_1 (S02 / S03) 経由で MIG へ。乗除算命令 (RV32M) 有効。例外 (不正命令 BASIC / misaligned) も有効にする (無効だと mret が素通りされ、割り込みから戻れずに暴走する)
+  - axi_ethernetlite_0: MII + MDIO, 送受信とも 2 バッファ (ping-pong)
+  - axi_timer_0 (lwIP の周期処理), axi_uartlite_0 (115200 bps, 8N1)
+  - axi_intc_0: intr[0] = EthernetLite, intr[1] = Timer → MicroBlaze-V INTERRUPT
+  - 外部ポート `MII_*` / `MDIO_{mdc, mdio_i, mdio_o, mdio_t}` / `UART_{rxd, txd}` (MDIO の IOBUF は vga_top)
 
 ### cam_ddr による自動設定 (MIG キャリブ完了の約 10 µs 後に 1 回)
 
@@ -184,9 +198,9 @@ clk_wiz_0 はトップの BUFG 出力を受けるため `PRIM_SOURCE = Global_bu
 | 3 | VDMA S2MM: DMACR → START_ADDRESS×3 → STRIDE → HSIZE → VSIZE | 0x0001_0003 → 0x8000_0000 ×3 → 1920 → 1920 → 480 |
 | 4 | VDMA MM2S: 同上 (0x00, 0x5C–0x64, 0x58, 0x54, 0x50) | 同上 |
 
-- フレームバッファは DDR3 の 0x8000_0000 から 640×480×3 byte の 1 面 (3 スロットとも同じアドレス, genlock なし)。書き込み中のフレームを読むのでテアリングは出る
+- フレームバッファは DDR3 の 0x8000_0000 から 640×480×3 byte の 1 面 (3 スロットとも同じアドレス, genlock なし)。書き込み中のフレームを読むのでテアリングは出る。ファームウェアを動かすと起動時に VDMA を設定し直し、3 面 + genlock になる (下のファームウェアの項)
 - カメラ画素は設定完了後のフレーム先頭から FIFO に書き始める。FIFO が満杯になったらそのフレームの残りを捨て、次のフレーム先頭から再開する (LD2 が点灯)
-- MicroBlaze-V は残っているがファームウェアは不要 (未作成のまま)
+- VDMA / TPG の設定は cam_ddr が行うので、映像表示に MicroBlaze-V のファームウェアは要らない (ファームウェアは Ethernet / Web サーバーとテアリング対策用)
 
 ---
 
@@ -257,6 +271,20 @@ PmodVGA を JA + JB の隣接 2 スロットに差し込む。
 
 DDR3 のピン配置と IOSTANDARD は MIG IP の XDC が付与する。
 
+### Ethernet PHY (TI DP83848J, MII) / USB-UART
+
+| 信号 | FPGA | 信号 | FPGA |
+|------|------|------|------|
+| eth_ref_clk (25 MHz 出力) | G18 | eth_rx_clk | F15 |
+| eth_rstn | C16 | eth_rx_dv | G16 |
+| eth_tx_clk | H16 | eth_rxerr | C17 |
+| eth_tx_en | H15 | eth_rxd[3:0] | G17, E18, E17, D18 |
+| eth_txd[3:0] | H17, J13, J14, H14 | eth_col / eth_crs | D17 / G14 |
+| eth_mdc / eth_mdio | F16 / K13 | uart_txd_in (PC→FPGA) / uart_rxd_out (FPGA→PC) | A9 / D10 |
+
+- eth_ref_clk は vga_top の MMCM の 25 MHz (pclk) を ODDR でピンに出す
+- PHY の MDIO アドレスは 1 (Arty の既定)
+
 ---
 
 ## タイミング制約
@@ -265,18 +293,22 @@ DDR3 のピン配置と IOSTANDARD は MIG IP の XDC が付与する。
 |------|------|
 | `create_clock sys_clk` | 10 ns (E3) |
 | `create_clock cam_pclk` | 40 ns (D4) |
-| `set_clock_groups -asynchronous` | sys_clk 系 (MMCM 生成含む) と cam_pclk 系 |
+| `create_clock eth_rx_clk / eth_tx_clk` | 40 ns (F15 / H16, PHY が出す MII クロック) |
+| `set_clock_groups -asynchronous` | sys_clk 系 (MMCM 生成含む) / cam_pclk 系 / eth_rx_clk / eth_tx_clk |
 | `set_false_path` | `ddr3_calib_sync_reg[0]`, `u_cam_ddr/calib_sync_reg[0]`, `u_cam_ddr/sel_sync_reg[0]`, `u_cam_ddr/run_sync_reg[0]` へのパス |
 | dbg_hub | 入力 100 MHz, 分周なし, `connect_debug_port dbg_hub/clk [get_nets clk100]` |
 
-前回の実装では MIG 内部 (u_ddr_phy_init) の 3 パスのみ WNS -0.190 ns。VGA 化後は未確認。
+Ethernet 追加後の実装 (2026-11-21, プロジェクトのコピーで確認): WNS -0.081 ns / WHS +0.015 ns。違反は MIG 内部 (u_ddr_phy_init, clk_pll_i 6 ns) の 1 パスだけで、以前から出ているもの (前回 -0.190 ns)。SYSCLK +0.98 ns, eth_rx_clk / eth_tx_clk は余裕あり。MIG のクロック設定見直しは今後の課題。
+
+キャッシュを各 32 KB / ライン 8 ワードにした後の実装 (2026-11-22): 既定の strategy では SYSCLK が -0.265 ns (MicroBlaze-V 内部の 22 パス) で満たせなかったため、impl_1 の strategy を **Performance_ExplorePostRoutePhysOpt** に変更。WNS -0.063 ns / WHS +0.020 ns、SYSCLK +0.095 ns。違反は上と同じ MIG 内部 (u_ddr_phy_init) の 1 パスだけ。BRAM 32.5 / 50 タイル。
 
 ---
 
 ## BRAM 使用量
 
 BRAM のフレームバッファは廃止した (モノクロの 640×480×8bit でも約 2.4 Mbit で XC7A35T の BRAM 1.8 Mbit に載らないため)。
-BRAM 経路があった前回の実装で 35 / 50 タイル。今回はフレームバッファ分 (約 19 タイル) が減る見込み (要再合成で確認)。
+BRAM 経路があった前回の実装で 35 / 50 タイル。Ethernet 追加後の実装で 20.5 / 50 タイル (RAMB36 ×15, RAMB18 ×11)。
+ロジックは LUT 17,549 / 20,800 (84 %), FF 20,205 / 41,600 (49 %) で、LUT の残りは少ない。
 
 ---
 
@@ -361,8 +393,54 @@ xsim cam_ddr_tb -R
    ```
 5. Hardware Manager でボードに書き込み (USB-JTAG。リモートの場合はボード側 PC で hw_server を起動し `<ホスト名>:3121` に接続)
 
-合成の前に一度 `source {D:/xlinix/vga_camera/cam_ddr_bd.tcl}` を実行する。fb_test にカメラ用ポートを追加し、cam_ddr.v を追加、廃止した fb_reader.v / vga_mono.v をプロジェクトから外す (何度実行してもよい)。
+合成の前に一度 `source {D:/xlinix/vga_camera/cam_ddr_bd.tcl}` を実行し、続けて `source {D:/xlinix/vga_camera/eth_bd.tcl}` を実行する (Ethernet / UART / キャッシュの追加。何度実行してもよい)。fb_test にカメラ用ポートを追加し、cam_ddr.v を追加、廃止した fb_reader.v / vga_mono.v をプロジェクトから外す (何度実行してもよい)。
 fb_test の配線を作り直す場合は `source {D:/xlinix/vga_camera/fix_fb_test_bd.tcl}` を実行し、その後 `cam_ddr_bd.tcl` をもう一度実行する。
+
+### ファームウェア (MicroBlaze-V, Vitis 2026.1)
+
+`sw/` に置いた。Vitis ワークスペース `firmware/` は生成物 (git 管理外) で、毎回スクリプトから作り直す。
+
+| ファイル | 内容 |
+|------|------|
+| `sw/export_xsa.tcl` | 実装結果 (ビットストリーム込み) を `firmware/vga_top.xsa` に出力 |
+| `sw/build_fw.py` | プラットフォーム `vga_plat` (standalone + lwip220 RAW API, DHCP) とアプリ `vga_web` を作成してビルド。アプリは lwip_echo_server テンプレート (プラットフォーム / lwIP 初期化) を土台に `sw/src` で上書きし、テンプレートの echo.c は `sw/src` の main.c / platform.c 以外の .c (http_server.c, frame.c) に差し替える。lwIP は送信バッファ 64 KB、コピーなし送信用の pbuf 1024 個 |
+| `sw/src/main.c` | テンプレートの main.c を置き換え。xemac_add の前に MDIO で PHY (ID / BMSR) を読み、リンクを最大 10 秒待って UART に表示 (lwIP のドライバはオートネゴ完了を無期限に待つため、リンクが無いと無言で止まる) |
+| `sw/src/platform.c` | テンプレートの platform.c を置き換え。SDT 構成ではタイマー割り込みが xemac_add より前から動くため、xemac_add 完了 (`EthNetifReady`) まで `eth_link_detect` を呼ばない (未初期化の netif->state を参照して暴走するのを防ぐ)。時間計測用に 50 ms ごとの割り込み回数 (`PlatformTicks`) を数える |
+| `sw/src/frame.c` | VDMA の設定し直し (3 面 + genlock) とスナップショット。下の「テアリング対策」を参照 |
+| `sw/src/http_server.c` | Web サーバー (ポート 80, HTTP/1.0)。`/` は画像を連続で読み込み直す HTML 1 ページ、`/frame.bmp` は最新のカメラフレームのスナップショットを 24 bit BMP (640×480, 上から下の行順) にして返す。画素はコピーせず、フレームバッファを直接 lwIP に渡す (tcp_write の COPY なし)。Nagle は無効 |
+| `sw/run_fw.tcl` | xsdb で FPGA 書き込み → ELF を DDR3 にロードして実行 |
+
+手順 (PowerShell, リポジトリ直下):
+
+1. Vivado で実装後、Tcl Console で `source {D:/xlinix/vga_camera/sw/export_xsa.tcl}`
+2. `cmd /c "chcp 65001 >nul && C:\AMDDesignTools\2026.1\Vitis\bin\vitis.bat -s sw\build_fw.py"`
+3. Vivado の Hardware Manager を閉じてから `C:\AMDDesignTools\2026.1\Vitis\bin\xsdb.bat sw\run_fw.tcl`
+4. USB-UART (115200 bps, 8N1) に IP アドレスが表示される (DHCP が取れない場合は 192.168.1.10 固定)
+5. ブラウザで `http://<IP>/` を開くとカメラ画像が表示され、読み込みが終わるたびに次のフレームを取りに行く
+
+メモ:
+
+- プログラムは DDR3 の 0x8100_0000〜 に置く (0x8000_0000〜 はフレームバッファ)。`-mcmodel=medany` でビルド
+- 実機確認済み: DHCP で IP 取得、ping 応答 (約 1 ms)、`/` と `/frame.bmp` (921,654 バイト) の取得、それ以外は 404
+- 1 フレーム (921,654 バイト) の取得は約 0.78 秒 (約 1.2 MB/s)。3 クライアント同時でも全員取得できる (約 1.9〜2.1 秒)
+- 速度はメモリの遅さで決まっている。DDR3 のキャッシュミス 1 回が約 2.3 µs かかり、プログラムも DDR3 で動く。キャッシュ各 8 KB / ライン 4 ワードでは 1 フレーム約 1.4 秒 (段階 3 は 1.9 秒) だったのを、各 32 KB / ライン 8 ワードにして約 0.78 秒にした
+- MAC アドレスはテンプレート既定の 00:0a:35:00:01:02
+- 日本語ロケールの Windows では vitis.bat が UTF-8 デコードエラーで失敗するので `chcp 65001` を付ける
+- Vitis 2026.1 同梱の `lwip220_v1_4/data/lwip220.yaml` は先頭に BOM があり、lwip220 がライブラリとして認識されない。`build_fw.py` が BOM を除いたコピーを `firmware/sw_repo` に作ってローカルリポジトリとして登録する
+- スクリプト終了後も vitis-server (java.exe) が残ってワークスペースを掴むことがある。次の実行で "already in use" になったら終了させる
+
+#### テアリング対策 (frame.c)
+
+- 起動時に VDMA をリセットして設定し直す。3 スロットに別々のバッファを入れ、S2MM (カメラ) は 3 面を順に書く。MM2S (VGA) は S2MM の dynamic genlock スレーブにして、書き終わった直前のフレームだけを読む → VGA でもテアリングしない
+- S2MM 側にも GenlockEn (dynamic master) を付けると、実機ではフレーム 0 のまま VDMAIntErr で止まった。S2MM は genlock なしで回す
+- カメラのフレームの途中で S2MM を起動すると、VDMAIntErr / SOFLateErr で止まることがある。エラーをクリアして VSIZE を書き直すと動き出すので、起動時に書き込みスロットが動くまで繰り返す (UART に `[vdma] N restarts, camera 31 frames/s ...`)
+- スナップショットはコピーしない (900 KB を読むだけで 1 フレーム時間 33 ms を大きく超えるため)。代わりに、表示中の (= 最新の書き終わった) フレームのバッファを空きバッファと入れ替えて VDMA の巡回から外す:
+  1. 表示中のスロット r のバッファ P を選ぶ
+  2. S2MM のスロット r のアドレスを空きバッファに変える (次のカメラフレームから有効。r が次に書かれるのは 2 フレーム後)
+  3. 表示がスロット r を離れるのを待ってから、MM2S のスロット r も同じ空きバッファに変える
+  4. P はどのスロットにも無いので VDMA は触らない。送信中ずっとこの状態を保つ
+- 送る直前の部分だけ、P の中でバイト順を G,B,R → B,G,R に直す (直した直後に lwIP がチェックサムを計算するので、まだキャッシュに乗っている)。送信が終わったら D キャッシュを書き戻して空きバッファに戻す
+- 50 ms 以内に来たリクエストは同じスナップショットを共有する。それ以外はリクエストごとに新しいフレームを確保する (空きバッファが無いときは最新のものを共有)
 
 ---
 
@@ -373,7 +451,7 @@ fb_test の配線を作り直す場合は `source {D:/xlinix/vga_camera/fix_fb_t
 3. LD1 点灯 → VDMA / TPG の自動設定完了
 4. VGA モニタに 640×480 全画面でカラーのカメラ映像が表示される (色味がおかしい場合は下の既知の制約を参照)
 5. SW0 ON → TPG の水平ランプに切り替わる
-6. 横方向の帯状の輝度変化が出る場合は SW2 を ON (AGC/AEC 固定)。帯が消えれば AGC/AEC による明るさ変化 (+ 1 面バッファのテアリング) が原因
+6. 横方向の帯状の輝度変化が出る場合は SW2 を ON (AGC/AEC 固定)。帯が消えれば AGC/AEC による明るさ変化 (ファームウェアなしなら + 1 面バッファのテアリング) が原因
 7. 行ごとに明るさが変わる (暗い部分を含む行のほかの部分が明るくなる, H サグ) 場合は SW3 を ON。
    黒い四角の左右の灰色が上下の灰色より明るく見えれば表示側 (PmodVGA / ケーブル / モニタのアナログ) が原因。
    同じ明るさならセンサ側 (ILA の probe0 `cam_d` / probe3 でカメラ生データも確認できる)
@@ -386,4 +464,5 @@ fb_test の配線を作り直す場合は `source {D:/xlinix/vga_camera/fix_fb_t
 - DDR3 経路 (cam_ddr + VDMA) は実機未確認。MIG は -1 品種向けのクロック設定 (4:1 / 325 MHz など) への見直しが必要
 - RGB565 出力は実機未確認。色が入れ替わる (赤と青など) 場合は `ov7670_capture` の `rgb16` (バイト順) や `cam_ddr` の `rgb565_axis` を見直す。色味・彩度は色変換マトリクス (0x4F–0x58) と AWB の調整が必要な場合がある
 - カメラ (約 30 fps) と表示 (60 Hz) は非同期で、同じフレームを 2 回読む
-- フレームバッファは 1 面のため、速い動きでテアリングが出る (genlock 3 面化は今後)
+- ファームウェアなしではフレームバッファが 1 面のため、速い動きでテアリングが出る (ファームウェアが 3 面 + genlock に設定し直す)
+- Web の画像取得は 1 フレーム約 0.78 秒。SYSCLK (100 MHz) は MicroBlaze-V のキャッシュ拡大で余裕が小さく (+0.095 ns)、Performance_ExplorePostRoutePhysOpt でやっと満たしている。BD を変えたらタイミングを確認すること

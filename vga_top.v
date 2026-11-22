@@ -72,7 +72,26 @@ module vga_top (
     output wire [0:0]  ddr3_cke,
     output wire [0:0]  ddr3_cs_n,
     output wire [0:0]  ddr3_dm,
-    output wire [0:0]  ddr3_odt
+    output wire [0:0]  ddr3_odt,
+
+    // ── Ethernet (TI DP83848J, MII 10/100) ───────────────
+    output wire        eth_ref_clk,  // PHY 用 25 MHz
+    output wire        eth_rstn,     // PHY リセット (負論理)
+    input  wire        eth_tx_clk,
+    output wire        eth_tx_en,
+    output wire [3:0]  eth_txd,
+    input  wire        eth_rx_clk,
+    input  wire        eth_rx_dv,
+    input  wire        eth_rxerr,
+    input  wire [3:0]  eth_rxd,
+    input  wire        eth_col,
+    input  wire        eth_crs,
+    output wire        eth_mdc,
+    inout  wire        eth_mdio,
+
+    // ── USB-UART (FT2232H, 115200 bps) ───────────────────
+    input  wire        uart_txd_in,  // PC → FPGA
+    output wire        uart_rxd_out  // FPGA → PC
 );
 
     // =========================================================================
@@ -146,6 +165,9 @@ module vga_top (
     wire        cfg_awvalid, cfg_awready, cfg_wvalid, cfg_wready, cfg_bvalid, cfg_bready;
     wire        cfg_arvalid, cfg_arready, cfg_rvalid, cfg_rready;
 
+    // ── Ethernet / UART (eth_bd.tcl) ──
+    wire        mdio_i, mdio_o, mdio_t;
+
     fb_test fb_test_i (
         .CLK                 (clk100),
         .RESET               (btn_rst),
@@ -207,7 +229,43 @@ module vga_top (
         .S_AXI_CFG_rdata     (cfg_rdata),
         .S_AXI_CFG_rresp     (cfg_rresp),
         .S_AXI_CFG_rvalid    (cfg_rvalid),
-        .S_AXI_CFG_rready    (cfg_rready)
+        .S_AXI_CFG_rready    (cfg_rready),
+        // ── Ethernet (AXI EthernetLite, eth_bd.tcl で追加) ──
+        .MII_col             (eth_col),
+        .MII_crs             (eth_crs),
+        .MII_rst_n           (eth_rstn),
+        .MII_rx_clk          (eth_rx_clk),
+        .MII_rx_dv           (eth_rx_dv),
+        .MII_rx_er           (eth_rxerr),
+        .MII_rxd             (eth_rxd),
+        .MII_tx_clk          (eth_tx_clk),
+        .MII_tx_en           (eth_tx_en),
+        .MII_txd             (eth_txd),
+        .MDIO_mdc            (eth_mdc),
+        .MDIO_mdio_i         (mdio_i),
+        .MDIO_mdio_o         (mdio_o),
+        .MDIO_mdio_t         (mdio_t),
+        // ── USB-UART (AXI UARTLite, eth_bd.tcl で追加) ──
+        .UART_rxd            (uart_txd_in),
+        .UART_txd            (uart_rxd_out)
+    );
+
+    // MDIO (双方向, オープンドレインではなく T で Hi-Z 制御)
+    IOBUF u_mdio_iobuf (.I(mdio_o), .O(mdio_i), .T(mdio_t), .IO(eth_mdio));
+
+    // PHY 用 25 MHz (MMCM の pclk を ODDR でピンへ出す)
+    ODDR #(
+        .DDR_CLK_EDGE ("OPPOSITE_EDGE"),
+        .INIT         (1'b0),
+        .SRTYPE       ("SYNC")
+    ) u_eth_ref_oddr (
+        .Q  (eth_ref_clk),
+        .C  (pclk),
+        .CE (1'b1),
+        .D1 (1'b1),
+        .D2 (1'b0),
+        .R  (1'b0),
+        .S  (1'b0)
     );
 
     // RGB888 の各色 (4bit 化は 4. のディザ)。輝度 Y = (77R + 150G + 29B) / 256 は ILA 表示用
