@@ -196,14 +196,16 @@ static void line_convert(u32 *p)
 {
 	int i;
 
-	for (i = 0; i < FB_LINE / 12; i++) {
-		u32 w0 = p[0], w1 = p[1], w2 = p[2];
-		/* w0 = G0 B0 R0 G1, w1 = B1 R1 G2 B2, w2 = R2 G3 B3 R3 (low byte first)
-		 * out  B0 G0 R0 B1,      G1 R1 B2 G2,      R2 B3 G3 R3 */
-		p[0] = ((w0 >> 8) & 0xFF) | ((w0 & 0xFF) << 8) | (w0 & 0xFF0000) | ((w1 & 0xFF) << 24);
-		p[1] = (w0 >> 24) | (w1 & 0xFF00) | ((w1 >> 24) << 16) | (((w1 >> 16) & 0xFF) << 24);
-		p[2] = (w2 & 0xFF) | (((w2 >> 16) & 0xFF) << 8) | (((w2 >> 8) & 0xFF) << 16) | (w2 & 0xFF000000);
-		p += 3;
+	/* G,B,R -> B,G,R = swap bytes 0 and 1 of each pixel. Byte loads / stores instead of
+	 * word shifts: this MicroBlaze-V's AREA barrel shifter takes ~1 cycle per bit shifted,
+	 * which made the word version ~4x slower. */
+	u8 *b = (u8 *)p;
+
+	for (i = 0; i < FB_W; i += 4, b += 12) {
+		u8 g0 = b[0], b0 = b[1], g1 = b[3], b1 = b[4];
+		u8 g2 = b[6], b2 = b[7], g3 = b[9], b3 = b[10];
+		b[0] = b0; b[1] = g0; b[3] = b1; b[4] = g1;
+		b[6] = b2; b[7] = g2; b[9] = b3; b[10] = g3;
 	}
 }
 

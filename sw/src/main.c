@@ -44,6 +44,10 @@
 #include "xil_printf.h"
 #include "xemaclite.h"
 #include "sleep.h"
+#include "face.h"
+#include "frame.h"
+int http_busy(void);
+static u32 face_next;      /* frame_now_us() before which no detection slice runs */
 
 #if LWIP_IPV6==1
 #include "lwip/ip.h"
@@ -344,6 +348,14 @@ int main()
 		}
 		xemacif_input(echo_netif);
 		transfer_data();
+		/* Face detection (face.c) in slices. While images are being sent: 1 ms of
+		 * detection, then 2 ms of network only; otherwise 10 ms slices. */
+		if (!http_busy()) {
+			face_poll(10000);
+		} else if ((s32)(frame_now_us() - face_next) >= 0) {
+			face_poll(1000);
+			face_next = frame_now_us() + 2000;
+		}
 	}
 
 	/* never reached */

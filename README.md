@@ -419,6 +419,9 @@ fb_test の配線を作り直す場合は `source {D:/xlinix/vga_camera/fix_fb_t
 | `sw/src/main.c` | テンプレートの main.c を置き換え。xemac_add の前に MDIO で PHY (ID / BMSR) を読み、リンクを最大 10 秒待って UART に表示 (lwIP のドライバはオートネゴ完了を無期限に待つため、リンクが無いと無言で止まる)。待ち時間は axi_timer_0 のカウンタで測る (`usleep()` は使えない。下の QSPI ブートのメモ) |
 | `sw/src/platform.c` | テンプレートの platform.c を置き換え。SDT 構成ではタイマー割り込みが xemac_add より前から動くため、xemac_add 完了 (`EthNetifReady`) まで `eth_link_detect` を呼ばない (未初期化の netif->state を参照して暴走するのを防ぐ)。時間計測用に 50 ms ごとの割り込み回数 (`PlatformTicks`) を数える |
 | `sw/src/frame.c` | VDMA の設定し直し (3 面 + genlock) とスナップショット。下の「テアリング対策」を参照 |
+| `sw/src/face.c`, `face_cascade.h` | 顔検出 (Viola-Jones)。下の「顔検出」を参照。face_cascade.h は OpenCV のカスケードから生成した表 |
+| `sw/tools/gen_cascade.py` | OpenCV の Haar カスケード (XML) → face_cascade.h |
+| `sw/tools/face_ref.py` | face.c と同じ計算の Python モデル (OpenCV との比較用) |
 | `sw/src/http_server.c` | Web サーバー (ポート 80, HTTP/1.0)。`/` は画像を連続で読み込み直す HTML 1 ページ、`/frame.bmp` は最新のカメラフレームのスナップショットを 24 bit BMP (640×480, 上から下の行順) にして返す。画素はコピーせず、フレームバッファを直接 lwIP に渡す (tcp_write の COPY なし)。Nagle は無効 |
 | `sw/run_fw.tcl` | xsdb で FPGA 書き込み → ELF を DDR3 にロードして実行 (開発用。電源を切ると消える) |
 | `sw/boot/` | BRAM ブートローダ (start.S, boot.c, boot.ld)。下の「QSPI ブート」を参照 |
@@ -430,7 +433,7 @@ fb_test の配線を作り直す場合は `source {D:/xlinix/vga_camera/fix_fb_t
 2. `cmd /c "chcp 65001 >nul && C:\AMDDesignTools\2026.1\Vitis\bin\vitis.bat -s sw\build_fw.py"`
 3. Vivado の Hardware Manager を閉じてから `C:\AMDDesignTools\2026.1\Vitis\bin\xsdb.bat sw\run_fw.tcl`
 4. USB-UART (115200 bps, 8N1) に IP アドレスが表示される (DHCP が取れない場合は 192.168.1.10 固定)
-5. ブラウザで `http://<IP>/` を開くとカメラ画像が表示され、読み込みが終わるたびに次のフレームを取りに行く
+5. ブラウザで `http://<IP>/` を開くとカメラ画像が表示され、読み込みが終わるたびに次のフレームを取りに行く。顔が見つかると緑の枠が重なる
 
 メモ:
 
@@ -489,6 +492,47 @@ C:\AMDDesignTools\2026.1\Vivado\bin\vivado.bat -mode batch -nojournal -nolog -so
 - `sw/run_fw.tcl` (JTAG) は今までどおり使える (impl_1 のビットストリームはブートローダなしで、BRAM は `j 0` のまま)
 - 実機確認 (2026-11-22): `boot_hw_device` (PROG と同じ) でフラッシュから起動し、ブートローダ → ファームウェア → DHCP → `/frame.bmp` 取得まで確認
 
+### 顔検出 (face.c, 段階 6)
+
+MicroBlaze-V のソフトウェアで、カメラ画像から正面の顔を見つける (誰の顔かは判別しない)。Viola-Jones 法 (Haar 特徴のカスケード) で、検出器は OpenCV 同梱の `haarcascade_frontalface_alt.xml` (20×20 窓, 22 段, 弱分類器 2135 個, Intel License Agreement = BSD 系)。
+
+- `GET /faces` が最新の結果を JSON で返す: `{"seq":N,"ms":検出時間,"windows":窓数,"faces":[[x,y,w],...]}` (640×480 座標, 正方形)。ビューアページは画像を読み込むたびに `/faces` を取りに行き、緑の枠を重ねる (枠は 1〜数枚前のフレームのもの)
+- UART に `[face] #N: k face(s) in T ms ...` (顔があったときと 10 回に 1 回) と処理時間の内訳 `[face] time: ...` を出す
+
+処理の流れ (浮動小数点なし, 整数のみ):
+
+1. スナップショット (frame.c) を B,G,R に直し、白黒 160×120 に縮小 (4×4 画素の平均, (77R + 150G + 29B) の和 + 2048 を 12 ビット右シフト)
+2. 1.2 倍刻みの画像ピラミッド (バイリニア縮小) の各段で、20×20 の窓をずらしながら判定 (拡大率 2 倍までは 2 画素おき、それ以上は 1 画素おき)
+3. 窓ごとに内側 18×18 の標準偏差 nf = sqrt(A·Σv² − (Σv)²) を求め、弱分類器は Σ(重み × 矩形和) ≤ floor(しきい値 × nf) なら左の値。段の合計がしきい値未満なら打ち切り
+4. 近くに重なった検出をまとめる (OpenCV の groupRectangles 相当, eps 0.2, 4 個以上)
+5. 最小の顔は 160×120 で 20 画素 = 640×480 で 80 画素 (画面の幅の 1/8)
+
+処理時間 (実機, 顔なしの場面, 13,339 窓, 弱分類器の評価 約 60 万回):
+
+| | 時間 |
+|------|------|
+| 白黒 160×120 への縮小 | 約 245 ms |
+| ピラミッド各段の準備 | 約 90 ms |
+| 窓の判定 | 約 800 ms |
+| 合計 (画像を送っていないとき) | 約 1.2 秒 |
+| 合計 (ブラウザで画像を連続取得中) | 約 3.6 秒 (そのとき画像の取得は 1 枚 1.0〜1.7 秒) |
+
+メインループから `face_poll()` を呼び、少しずつ進める (画像を送っていないときは 1 回 10 ms、送信中は 1 ms 検出 → 2 ms ネットワークだけ)。
+
+速くするための工夫 (最初の実装は 1 回 3.4 秒、弱分類器 1 回 4.3 µs):
+
+- **この MicroBlaze-V のシフト命令は遅い**: バレルシフタが AREA 実装 (C_USE_BARREL = 2) で、シフト量 1 ビットにつき約 1 クロックかかる (実測。加算・乗算は 1〜3 クロック)。内側のループからシフトをなくした:
+  - 弱分類器の比較は 64 ビットシフトをやめ、しきい値を Q31 で持って `mulh(thr, 2·nf)` (= floor(thr·nf)) と比べる
+  - 積分画像のオフセットは最初から 4 倍したバイト単位で持つ (`index << 2` をなくす)
+  - 白黒化は 16 画素ぶん足してから 1 回だけシフト。frame.c の G,B,R → B,G,R 変換もワードのシフトからバイト単位の入れ替えにした (BMP 送信も速くなる)
+- **キャッシュに収める**: 画像全体の積分画像 (78 KB × 2) をやめ、窓 1 行ぶん (21 行) の帯の積分画像と、窓の内側の二乗和用の列ごとの累積和 (161 個) にした。最初の 10 段 (弱分類器 384 個, ほとんどの窓がここで打ち切られる) の表と合わせて 26 KB の 1 ブロックに置き、32 KB の D キャッシュの中で互いに追い出し合わないようにした
+
+確認:
+
+- `sw/tools/face_ref.py` は face.c と同じ整数演算の Python モデル。matplotlib 同梱のサンプル写真 (grace_hopper.jpg) で、OpenCV の `detectMultiScale` と同じ位置・大きさの顔を検出 (顔のないカメラ画像では両方 0 個)
+- 実機: 同じ写真の 160×120 白黒画像を JTAG で face.c の作業領域に書き込んで判定させ、モデルと同じ結果 (640×480 で (232,80) 大きさ 188, 14 ヒット) を確認
+- カスケードを変えるときは `python sw/tools/gen_cascade.py <xml> sw/src/face_cascade.h` (OpenCV の XML から整数の表を作る。作った face_cascade.h はリポジトリに入れてあるので、ビルドに OpenCV は要らない)
+
 ---
 
 ## 動作確認
@@ -512,4 +556,5 @@ C:\AMDDesignTools\2026.1\Vivado\bin\vivado.bat -mode batch -nojournal -nolog -so
 - RGB565 出力は実機未確認。色が入れ替わる (赤と青など) 場合は `ov7670_capture` の `rgb16` (バイト順) や `cam_ddr` の `rgb565_axis` を見直す。色味・彩度は色変換マトリクス (0x4F–0x58) と AWB の調整が必要な場合がある
 - カメラ (約 30 fps) と表示 (60 Hz) は非同期で、同じフレームを 2 回読む
 - ファームウェアなしではフレームバッファが 1 面のため、速い動きでテアリングが出る (ファームウェアが 3 面 + genlock に設定し直す)
-- Web の画像取得は 1 フレーム約 0.78 秒。SYSCLK (100 MHz) は MicroBlaze-V のキャッシュ拡大で余裕が小さく (QSPI 追加後 +0.011 ns)、Performance_ExplorePostRoutePhysOpt でやっと満たしている。BD を変えたらタイミングを確認すること
+- 顔検出は 1 回 1.2〜3.6 秒 (ソフトウェア処理)。MicroBlaze-V のバレルシフタを PERFORMANCE (C_USE_BARREL = 1) にすればシフトが 1 クロックになり、検出も lwIP のチェックサムなども速くなるはずだが、ビットストリームの作り直しが要り、LUT (89%) と SYSCLK のタイミングに余裕がない
+- Web の画像取得は 1 フレーム約 0.78 秒 (顔検出が動いている間は 1.0〜1.7 秒)。SYSCLK (100 MHz) は MicroBlaze-V のキャッシュ拡大で余裕が小さく (QSPI 追加後 +0.011 ns)、Performance_ExplorePostRoutePhysOpt でやっと満たしている。BD を変えたらタイミングを確認すること

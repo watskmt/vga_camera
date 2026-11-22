@@ -3,6 +3,7 @@
  *
  *   GET /           : one HTML page that shows the camera image and keeps reloading it
  *   GET /frame.bmp  : a snapshot of the latest camera frame as a 24-bit BMP
+ *   GET /faces      : latest face detection result (face.c) as JSON
  *   anything else   : 404
  *
  *   Frame buffers / snapshots: frame.c
@@ -31,6 +32,7 @@
 #include "xil_printf.h"
 #include "xil_types.h"
 #include "frame.h"
+#include "face.h"
 
 #define HTTP_PORT     80
 
@@ -42,7 +44,7 @@
 #define POLL_INTERVAL 1       /* x 500 ms (tcp_slowtmr) */
 #define IDLE_LIMIT    40      /* drop connections stalled for ~20 s */
 
-enum body_kind { BODY_HTML, BODY_BMP, BODY_404 };
+enum body_kind { BODY_HTML, BODY_BMP, BODY_JSON, BODY_404 };
 
 struct http_conn {
 	char req[REQ_MAX];
@@ -52,6 +54,8 @@ struct http_conn {
 	int  snap;                 /* frame.c snapshot handle, -1 = none */
 	enum body_kind kind;
 	char hdr[192];
+	char json[400];            /* /faces body (sent with COPY) */
+	u32  json_len;
 	u32  hdr_len;
 	u32  pos;                  /* bytes already passed to tcp_write (header + body) */
 	u32  total;                /* header + body */
@@ -65,17 +69,25 @@ static const char html_page[] =
 	"<title>vga_camera</title>\n"
 	"<style>\n"
 	"body{margin:0;padding:16px;background:#111;color:#ddd;font-family:sans-serif;text-align:center}\n"
-	"img{display:block;margin:0 auto;width:640px;max-width:100%;height:auto;background:#000;border:1px solid #444}\n"
+	"#v{position:relative;width:640px;max-width:100%;margin:0 auto}\n"
+	"img{display:block;width:100%;height:auto;background:#000}\n"
+	"canvas{position:absolute;left:0;top:0;width:100%;height:100%}\n"
 	"p{font-size:14px;color:#999}\n"
 	"</style></head>\n"
 	"<body>\n"
 	"<h1>vga_camera</h1>\n"
-	"<img id=\"f\" src=\"/frame.bmp\" width=\"640\" height=\"480\" alt=\"camera\">\n"
+	"<div id=\"v\"><img id=\"f\" src=\"/frame.bmp\" width=\"640\" height=\"480\" alt=\"camera\">"
+	"<canvas id=\"c\" width=\"640\" height=\"480\"></canvas></div>\n"
 	"<p id=\"s\">loading...</p>\n"
 	"<script>\n"
-	"var f=document.getElementById('f'),s=document.getElementById('s'),n=0,t=Date.now();\n"
+	"var f=document.getElementById('f'),s=document.getElementById('s'),"
+	"g=document.getElementById('c').getContext('2d'),n=0,t=Date.now(),d='';\n"
 	"function next(){t=Date.now();f.src='/frame.bmp?'+t;}\n"
-	"f.onload=function(){n++;s.textContent='frame '+n+' ('+(Date.now()-t)+' ms)';setTimeout(next,100);};\n"
+	"function faces(){fetch('/faces?'+Date.now()).then(function(r){return r.json();}).then(function(j){\n"
+	"g.clearRect(0,0,640,480);g.lineWidth=3;g.strokeStyle='#0f0';\n"
+	"j.faces.forEach(function(b){g.strokeRect(b[0],b[1],b[2],b[2]);});\n"
+	"d=' / faces '+j.faces.length+' (detect '+j.ms+' ms)';}).catch(function(){});}\n"
+	"f.onload=function(){n++;s.textContent='frame '+n+' ('+(Date.now()-t)+' ms)'+d;faces();setTimeout(next,100);};\n"
 	"f.onerror=function(){s.textContent='error, retrying';setTimeout(next,1000);};\n"
 	"</script>\n"
 	"</body></html>\n";
@@ -83,6 +95,7 @@ static const char html_page[] =
 static const char page_404[] = "404 Not Found\n";
 
 static u8 bmp_hdr[BMP_HDR_LEN];
+static int bmp_active;                 /* BMP responses in progress (see http_busy) */
 
 /* ── BMP header (BITMAPFILEHEADER + BITMAPINFOHEADER, 24 bit, negative height = top-down) ── */
 static void put_le16(u8 *p, u32 v) { p[0] = v; p[1] = v >> 8; }
@@ -105,18 +118,25 @@ static void bmp_header_init(void)
 	put_le32(&bmp_hdr[42], 2835);
 }
 
-static u32 body_len(enum body_kind k)
+static u32 body_len(const struct http_conn *c)
 {
-	switch (k) {
+	switch (c->kind) {
 	case BODY_HTML: return sizeof(html_page) - 1;
 	case BODY_BMP:  return BMP_FILE_LEN;
+	case BODY_JSON: return c->json_len;
 	default:        return sizeof(page_404) - 1;
 	}
 }
 
-/* Pointer to body byte off and how many bytes are contiguous from there (static data) */
-static const u8 *body_ptr(enum body_kind k, int snap, u32 off, u32 *avail)
+/* Pointer to body byte off and how many bytes are contiguous from there */
+static const u8 *body_ptr(const struct http_conn *c, u32 off, u32 *avail)
 {
+	enum body_kind k = c->kind;
+
+	if (k == BODY_JSON) {
+		*avail = c->json_len - off;
+		return (const u8 *)&c->json[off];
+	}
 	if (k == BODY_HTML) {
 		*avail = sizeof(html_page) - 1 - off;
 		return (const u8 *)&html_page[off];
@@ -130,7 +150,7 @@ static const u8 *body_ptr(enum body_kind k, int snap, u32 off, u32 *avail)
 		return &bmp_hdr[off];
 	}
 	*avail = BMP_FILE_LEN - off;
-	return frame_data(snap) + (off - BMP_HDR_LEN);
+	return frame_data(c->snap) + (off - BMP_HDR_LEN);
 }
 
 static void conn_free(struct http_conn *c)
@@ -138,6 +158,7 @@ static void conn_free(struct http_conn *c)
 	if (c == NULL)
 		return;
 	if (c->snap >= 0) {
+		bmp_active--;
 		frame_release(c->snap);          /* lwIP holds no pointers into it any more */
 		if (c->pos >= c->total)
 			xil_printf("[bmp] buffer %d sent in %d ms\r\n", c->snap,
@@ -187,8 +208,9 @@ static err_t send_more(struct tcp_pcb *pcb, struct http_conn *c)
 				n = h;
 		} else {
 			u32 avail;
-			p = body_ptr(c->kind, c->snap, c->pos - c->hdr_len, &avail);
-			flags = 0;                           /* static data: no copy */
+			p = body_ptr(c, c->pos - c->hdr_len, &avail);
+			/* static data / snapshot: no copy. The JSON lives in the struct: copy */
+			flags = (c->kind == BODY_JSON) ? TCP_WRITE_FLAG_COPY : 0;
 			if (n > avail)
 				n = avail;
 		}
@@ -225,6 +247,12 @@ static err_t start_response(struct tcp_pcb *pcb, struct http_conn *c)
 		type = "image/bmp";
 		c->t_start = frame_now_us();
 		c->snap = frame_snapshot();
+		bmp_active++;
+	} else if (strncmp(c->req, "GET /faces", 10) == 0 &&
+		   (c->req[10] == ' ' || c->req[10] == '?')) {
+		c->kind = BODY_JSON;
+		type = "application/json";
+		c->json_len = face_json(c->json, sizeof(c->json));
 	} else if (strncmp(c->req, "GET / ", 6) == 0 ||
 		   strncmp(c->req, "GET /index.html", 15) == 0) {
 		c->kind = BODY_HTML;
@@ -241,8 +269,8 @@ static err_t start_response(struct tcp_pcb *pcb, struct http_conn *c)
 			      "Cache-Control: no-store\r\n"
 			      "Connection: close\r\n"
 			      "\r\n",
-			      status, type, (unsigned long)body_len(c->kind));
-	c->total = c->hdr_len + body_len(c->kind);
+			      status, type, (unsigned long)body_len(c));
+	c->total = c->hdr_len + body_len(c);
 	c->pos = 0;
 	c->started = 1;
 	if (send_more(pcb, c) != ERR_OK)
@@ -355,6 +383,7 @@ void print_app_header(void)
 	xil_printf("\n\r\n\r----- vga_camera HTTP server -----\n\r");
 	xil_printf("GET /           : viewer page\n\r");
 	xil_printf("GET /frame.bmp  : camera frame (%dx%d, 24-bit BMP)\n\r", FB_W, FB_H);
+	xil_printf("GET /faces      : face detection result (JSON)\n\r");
 }
 
 int start_application(void)
@@ -364,6 +393,7 @@ int start_application(void)
 
 	bmp_header_init();
 	frame_init();
+	face_init();
 	pcb = tcp_new_ip_type(IPADDR_TYPE_ANY);
 	if (!pcb) {
 		xil_printf("Error creating PCB. Out of Memory\n\r");
@@ -387,4 +417,10 @@ int start_application(void)
 int transfer_data(void)
 {
 	return 0;
+}
+
+/* Number of BMP responses being sent (main.c gives face detection less time then) */
+int http_busy(void)
+{
+	return bmp_active;
 }

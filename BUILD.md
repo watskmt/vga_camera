@@ -152,7 +152,7 @@ C:\AMDDesignTools\2026.1\Vivado\bin\vivado.bat -mode batch -nojournal -nolog -so
    HTTP server started @ port 80
    ```
 
-3. ブラウザで `http://<Board IP>/` を開くとカメラ画像が表示され、更新され続ける
+3. ブラウザで `http://<Board IP>/` を開くとカメラ画像が表示され、更新され続ける。顔が映ると緑の枠が出る (検出は 1〜4 秒に 1 回なので枠は少し遅れる)。`http://<Board IP>/faces` で検出結果の JSON も見られる
 4. VGA モニタにもカメラ映像が出る (ファームウェアなしでも出る)
 
 ## うまくいかないとき
@@ -164,4 +164,5 @@ C:\AMDDesignTools\2026.1\Vivado\bin\vivado.bat -mode batch -nojournal -nolog -so
 | UART に何も出ない | JP1 が SPI か、フラッシュのビットストリームが今のものか (5b をやり直す) |
 | `[phy] waiting for link...` のまま | LAN ケーブル / スイッチ側のリンク LED |
 | ブラウザで開けない | UART の Board IP を確認。DHCP が取れないと 192.168.1.10 固定になる |
+| 顔に枠が出ない | 顔が正面を向いているか、画面の幅の 1/8 (80 画素) 以上の大きさで映っているか。UART の `[face] #N: k face(s)` を見る |
 | JTAG 実行 (5a) の後、電源を入れ直したら古い動作に戻った | 正常。5a は DDR3 にしか入らない。残すには 5b |
