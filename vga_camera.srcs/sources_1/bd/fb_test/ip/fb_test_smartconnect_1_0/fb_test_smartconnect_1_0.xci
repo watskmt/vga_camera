@@ -357,7 +357,7 @@
             "SUPPORTS_NARROW_BURST": [ { "value": "0", "value_src": "constant_prop", "value_permission": "bd", "resolve_type": "generated", "format": "long", "is_static_object": false } ],
             "NUM_READ_OUTSTANDING": [ { "value": "2", "value_src": "user", "value_permission": "bd", "resolve_type": "generated", "format": "long", "is_static_object": false } ],
             "NUM_WRITE_OUTSTANDING": [ { "value": "2", "value_src": "user", "value_permission": "bd", "resolve_type": "generated", "format": "long", "is_static_object": false } ],
-            "MAX_BURST_LENGTH": [ { "value": "8", "value_src": "constant_prop", "value_permission": "bd", "resolve_type": "generated", "format": "long", "is_static_object": false } ],
+            "MAX_BURST_LENGTH": [ { "value": "4", "value_src": "constant_prop", "value_permission": "bd", "resolve_type": "generated", "format": "long", "is_static_object": false } ],
             "PHASE": [ { "value": "0.0", "value_src": "ip_propagated", "value_permission": "bd", "resolve_type": "generated", "format": "float", "is_static_object": false } ],
             "CLK_DOMAIN": [ { "value": "/clk_wiz_0_clk_out1", "value_src": "ip_propagated", "value_permission": "bd", "resolve_type": "generated", "is_static_object": false } ],
             "NUM_READ_THREADS": [ { "value": "1", "value_src": "constant_prop", "value_permission": "bd", "resolve_type": "generated", "format": "long", "is_static_object": false } ],
@@ -412,7 +412,7 @@
             "SUPPORTS_NARROW_BURST": [ { "value": "0", "value_src": "constant_prop", "value_permission": "bd", "resolve_type": "generated", "format": "long", "is_static_object": false } ],
             "NUM_READ_OUTSTANDING": [ { "value": "2", "value_src": "user", "value_permission": "bd", "resolve_type": "generated", "format": "long", "is_static_object": false } ],
             "NUM_WRITE_OUTSTANDING": [ { "value": "32", "value_src": "user", "value_permission": "bd", "resolve_type": "generated", "format": "long", "is_static_object": false } ],
-            "MAX_BURST_LENGTH": [ { "value": "8", "value_src": "constant_prop", "value_permission": "bd", "resolve_type": "generated", "format": "long", "is_static_object": false } ],
+            "MAX_BURST_LENGTH": [ { "value": "4", "value_src": "constant_prop", "value_permission": "bd", "resolve_type": "generated", "format": "long", "is_static_object": false } ],
             "PHASE": [ { "value": "0.0", "value_src": "ip_propagated", "value_permission": "bd", "resolve_type": "generated", "format": "float", "is_static_object": false } ],
             "CLK_DOMAIN": [ { "value": "/clk_wiz_0_clk_out1", "value_src": "ip_propagated", "value_permission": "bd", "resolve_type": "generated", "is_static_object": false } ],
             "NUM_READ_THREADS": [ { "value": "1", "value_src": "constant_prop", "value_permission": "bd", "resolve_type": "generated", "format": "long", "is_static_object": false } ],
@@ -533,5 +533,5 @@
       }
     }
   },
-  "checksum": "4399efd8"
+  "checksum": "fdbd81ff"
 }

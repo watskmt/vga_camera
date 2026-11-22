@@ -32,3 +32,8 @@ Thumbs.db
 *.log
 firmware/
 __pycache__/
+rtl_haar/sim/xsim.dir/
+rtl_haar/sim/*.jou
+rtl_haar/sim/*.pb
+rtl_haar/sim/*.log
+rtl_haar/sim/haar_*.mem

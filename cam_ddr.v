@@ -27,7 +27,8 @@ module cam_ddr #(
     parameter        CAM_W     = 640,
     parameter        CAM_H     = 480,
     parameter        UPSCALE   = 0,              // 1: 2 倍拡大して出力 (CAM_W ≤ 320)
-    parameter        CFG_WAIT  = 1000            // 設定開始までの待ち (aclk サイクル)
+    parameter        CFG_WAIT  = 1000,           // 設定開始までの待ち (aclk サイクル)
+    parameter        USE_TPG   = 1               // 0: v_tpg_0 なし (TPG のレジスタ設定を飛ばす)
 )(
     // ── カメラ側 (cam_pclk ドメイン) ──
     input  wire        cam_clk,
@@ -225,6 +226,7 @@ module cam_ddr #(
     cam_ddr_cfg #(
         .VDMA_BASE (VDMA_BASE),
         .TPG_BASE  (TPG_BASE),
+        .USE_TPG   (USE_TPG),
         .FB_ADDR   (FB_ADDR),
         .OUT_W     (OUT_W),
         .OUT_H     (OUT_H),
@@ -440,7 +442,8 @@ module cam_ddr_cfg #(
     parameter [31:0] FB_ADDR   = 32'h8000_0000,
     parameter        OUT_W     = 640,
     parameter        OUT_H     = 480,
-    parameter        WAIT_CYC  = 1000
+    parameter        WAIT_CYC  = 1000,
+    parameter        USE_TPG   = 1
 )(
     input  wire        aclk,
     input  wire        aresetn,
@@ -500,7 +503,7 @@ module cam_ddr_cfg #(
     always @(posedge aclk) begin
         if (!aresetn) begin
             st      <= ST_IDLE;
-            idx     <= 5'd0;
+            idx     <= USE_TPG ? 5'd0 : 5'd6;      // 6 = 最初の VDMA レジスタ
             wcnt    <= 16'd0;
             awvalid <= 1'b0;
             wvalid  <= 1'b0;

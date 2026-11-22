@@ -359,60 +359,6 @@
             },
             "V12": {
                 "VT": "AC",
-                "BA": "0x44A10000",
-                "HA": "0x44A1FFFF",
-                "BP": "C_S_AXI_CTRL_BASEADDR",
-                "HP": "C_S_AXI_CTRL_HIGHADDR",
-                "MA": "S_AXI_CFG",
-                "MX": "/",
-                "MI": "S_AXI_CFG",
-                "MS": "SEG_v_tpg_0_Reg",
-                "MV": ":::",
-                "SX": "/v_tpg_0",
-                "SI": "s_axi_CTRL",
-                "SS": "Reg",
-                "SV": "xilinx.com:ip:v_tpg:8.2",
-                "TM": "both",
-                "TU": "register"
-            },
-            "V13": {
-                "VT": "AC",
-                "BA": "0x44A10000",
-                "HA": "0x44A1FFFF",
-                "BP": "C_S_AXI_CTRL_BASEADDR",
-                "HP": "C_S_AXI_CTRL_HIGHADDR",
-                "MA": "Master_AXI",
-                "MX": "/axi_vip_0",
-                "MI": "M_AXI",
-                "MS": "SEG_v_tpg_0_Reg",
-                "MV": "xilinx.com:ip:axi_vip:1.1",
-                "SX": "/v_tpg_0",
-                "SI": "s_axi_CTRL",
-                "SS": "Reg",
-                "SV": "xilinx.com:ip:v_tpg:8.2",
-                "TM": "both",
-                "TU": "register"
-            },
-            "V14": {
-                "VT": "AC",
-                "BA": "0x44A10000",
-                "HA": "0x44A1FFFF",
-                "BP": "C_S_AXI_CTRL_BASEADDR",
-                "HP": "C_S_AXI_CTRL_HIGHADDR",
-                "MA": "Data",
-                "MX": "/microblaze_riscv_0",
-                "MI": "M_AXI_DP",
-                "MS": "SEG_v_tpg_0_Reg",
-                "MV": "xilinx.com:ip:microblaze_riscv:1.0",
-                "SX": "/v_tpg_0",
-                "SI": "s_axi_CTRL",
-                "SS": "Reg",
-                "SV": "xilinx.com:ip:v_tpg:8.2",
-                "TM": "data",
-                "TU": "register"
-            },
-            "V15": {
-                "VT": "AC",
                 "BA": "0x44A20000",
                 "HA": "0x44A2FFFF",
                 "BP": "C_BASEADDR",
@@ -429,7 +375,25 @@
                 "TM": "data",
                 "TU": "register"
             },
-            "V16": {
+            "V13": {
+                "VT": "AC",
+                "BA": "0x44A30000",
+                "HA": "0x44A3FFFF",
+                "BP": "C_BASEADDR",
+                "HP": "C_HIGHADDR",
+                "MA": "Data",
+                "MX": "/microblaze_riscv_0",
+                "MI": "M_AXI_DP",
+                "MS": "SEG_M_AXI_HAAR_Reg",
+                "MV": "xilinx.com:ip:microblaze_riscv:1.0",
+                "SX": "/",
+                "SI": "M_AXI_HAAR",
+                "SS": "Reg",
+                "SV": "::fb_test_imp:",
+                "TM": "data",
+                "TU": "register"
+            },
+            "V14": {
                 "VT": "AC",
                 "BA": "0x60000000",
                 "HA": "0x60FFFFFF",
@@ -448,7 +412,7 @@
                 "TM": "data",
                 "TU": "register"
             },
-            "V17": {
+            "V15": {
                 "VT": "AC",
                 "BA": "0x80000000",
                 "HA": "0x87FFFFFF",
@@ -467,7 +431,7 @@
                 "TM": "both",
                 "TU": "memory"
             },
-            "V18": {
+            "V16": {
                 "VT": "AC",
                 "BA": "0x80000000",
                 "HA": "0x87FFFFFF",
@@ -486,7 +450,7 @@
                 "TM": "both",
                 "TU": "memory"
             },
-            "V19": {
+            "V17": {
                 "VT": "AC",
                 "BA": "0x80000000",
                 "HA": "0x87FFFFFF",
@@ -505,7 +469,7 @@
                 "TM": "data",
                 "TU": "memory"
             },
-            "V20": {
+            "V18": {
                 "VT": "AC",
                 "BA": "0x80000000",
                 "HA": "0x87FFFFFF",
@@ -524,7 +488,25 @@
                 "TM": "instruction",
                 "TU": "memory"
             },
-            "V21": {
+            "V19": {
+                "VT": "ACE",
+                "BA": "0x00000000",
+                "HA": "0x00000000",
+                "BP": "C_BASEADDR",
+                "HP": "C_HIGHADDR",
+                "MA": "S_AXI_CFG",
+                "MX": "/",
+                "MI": "S_AXI_CFG",
+                "MS": "SEG_M_AXI_HAAR_Reg",
+                "MV": ":::",
+                "SX": "/",
+                "SI": "M_AXI_HAAR",
+                "SS": "Reg",
+                "SV": "::fb_test_imp:",
+                "TM": "both",
+                "TU": "register"
+            },
+            "V20": {
                 "VT": "ACE",
                 "BA": "0x00000000",
                 "HA": "0x00000000",
@@ -542,7 +524,7 @@
                 "TM": "both",
                 "TU": "register"
             },
-            "V22": {
+            "V21": {
                 "VT": "ACE",
                 "BA": "0x00000000",
                 "HA": "0x00000000",
@@ -561,7 +543,7 @@
                 "TM": "both",
                 "TU": "register"
             },
-            "V23": {
+            "V22": {
                 "VT": "ACE",
                 "BA": "0x00000000",
                 "HA": "0x00000000",
@@ -580,7 +562,7 @@
                 "TM": "both",
                 "TU": "register"
             },
-            "V24": {
+            "V23": {
                 "VT": "ACE",
                 "BA": "0x00000000",
                 "HA": "0x00000000",
@@ -598,7 +580,7 @@
                 "TM": "both",
                 "TU": "register"
             },
-            "V25": {
+            "V24": {
                 "VT": "ACE",
                 "BA": "0x00000000",
                 "HA": "0x00000000",
@@ -616,7 +598,7 @@
                 "TM": "both",
                 "TU": "register"
             },
-            "V26": {
+            "V25": {
                 "VT": "ACE",
                 "BA": "0x00000000",
                 "HA": "0x00000000",
@@ -631,6 +613,24 @@
                 "SI": "S_AXI",
                 "SS": "Reg",
                 "SV": "xilinx.com:ip:axi_uartlite:2.0",
+                "TM": "both",
+                "TU": "register"
+            },
+            "V26": {
+                "VT": "ACE",
+                "BA": "0x00000000",
+                "HA": "0x00000000",
+                "BP": "C_BASEADDR",
+                "HP": "C_HIGHADDR",
+                "MA": "Master_AXI",
+                "MX": "/axi_vip_0",
+                "MI": "M_AXI",
+                "MS": "SEG_M_AXI_HAAR_Reg",
+                "MV": "xilinx.com:ip:axi_vip:1.1",
+                "SX": "/",
+                "SI": "M_AXI_HAAR",
+                "SS": "Reg",
+                "SV": "::fb_test_imp:",
                 "TM": "both",
                 "TU": "register"
             },

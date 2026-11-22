@@ -533,6 +533,42 @@ MicroBlaze-V のソフトウェアで、カメラ画像から正面の顔を見�
 - 実機: 同じ写真の 160×120 白黒画像を JTAG で face.c の作業領域に書き込んで判定させ、モデルと同じ結果 (640×480 で (232,80) 大きさ 188, 14 ヒット) を確認
 - カスケードを変えるときは `python sw/tools/gen_cascade.py <xml> sw/src/face_cascade.h` (OpenCV の XML から整数の表を作る。作った face_cascade.h はリポジトリに入れてあるので、ビルドに OpenCV は要らない)
 
+### 顔検出のハードウェア処理 (hw-face ブランチ)
+
+顔検出の重い部分 (窓の判定) を FPGA のロジックで行う検証用の構成。リソースを空けるため、ほかの条件は緩めている (main ブランチとの違い):
+
+| 項目 | main | hw-face |
+|------|------|---------|
+| 顔検出の最初の 10 段 | ソフトウェア | `rtl_haar/haar_engine.v` (ハードウェア) |
+| v_tpg_0 (SW0 のテストパターン) | あり | 削除 (SW0 は使えない。ON にするとカメラ映像が止まる) |
+| ILA (ila_cam) / dbg_hub | あり | 外した (`USE_ILA` 未定義、dbg_hub の制約はコメントアウト) |
+| MicroBlaze-V のキャッシュ | 各 32 KB / 8 ワード | 各 8 KB / 4 ワード |
+| LUT / BRAM / DSP | 18,436 (89%) / 33 / 5 | 17,174 (83%) / 32 / 10 |
+| タイミング (WNS) | -0.010 ns (MIG 内部) | +0.013 ns (SYSCLK +0.123 ns) |
+| 顔検出 1 回 (画像を送っていないとき) | 約 1.2 秒 | 約 0.56 秒 (うち窓の判定 約 50 ms, ソフトだけだと約 900 ms) |
+| Web の画像取得 | 約 0.78 秒 | 約 2.3 秒 (キャッシュが小さいため) |
+
+エンジン (`rtl_haar/haar_engine.v`, LUT 1,460 / BRAM36 12 / DSP 5, SYSCLK 100 MHz):
+
+- AXI4-Lite スレーブ。BD の外部ポート `M_AXI_HAAR` (smartconnect_0 の TPG が使っていた口) から MicroBlaze-V で 0x44A3_0000
+- CPU がピラミッドの 1 段 (最大 160×120, 8 bit) を内蔵 RAM に書いて起動すると、窓 1 行ごとに帯の積分画像 (21 行 × 161, 20 bit) と二乗和の累積を作り、全部の窓について標準偏差 (16 クロックの整数平方根) と最初の 10 段 (弱分類器 384 個, ROM) を判定する
+- 10 段を通った窓の座標を FIFO (256 個) に積む。CPU はそれを読み、その窓だけ 21×21 の積分画像を作り直して残り 12 段をソフトで判定する (1 フレームで 25〜50 窓程度)
+- 計算は face.c と同じ整数演算でビット単位まで一致する。弱分類器 1 個あたり 7〜9 クロック、窓 1 個あたり約 400 クロック
+- レジスタ: 0x00 CTRL (bit0 start, bit1 clear) / 0x04 STATUS (bit0 busy, [24:16] FIFO 数) / 0x08 LEVEL (lw, lh, step) / 0x0C FIFO (読むと取り出し, bit31 有効, y, x) / 0x10 窓数 / 0x14 弱分類器数 / 0x18 INFO / 0x1C MAGIC "HAAR" / 0x8000〜 画像 (y × 160 + x)
+- ファームウェアは起動時に MAGIC を読み、エンジンがあれば使う (無ければ main と同じソフトウェア処理)。UART に `[face] HW engine: 10 stages, 384 weak classifiers`
+
+作り方 (main の手順に追加):
+
+1. `source {D:/xlinix/vga_camera/hw_bd.tcl}` (BD 変更 + RTL / ROM ファイルをプロジェクトに追加。eth_bd.tcl / qspi_bd.tcl の後)
+2. 合成 → 実装 → XSA 出力 → ファームウェアのビルドは main と同じ
+3. ROM を作り直すとき: `python sw/tools/gen_cascade.py <haarcascade_frontalface_alt.xml> sw/src/face_cascade.h rtl_haar 10` (最後の数字がハードウェアで行う段数)
+
+確認:
+
+- シミュレーション: `rtl_haar\sim\run_sim.bat` (xsim)。テスト写真のピラミッド 2 段 (160×120 の 2 画素おき / 77×58 の 1 画素おき) で、10 段を通る窓の座標・窓数・弱分類器数が Python モデルと一致 (PASS)。テストベクタは `python sw/tools/haar_vectors.py <画像> rtl_haar/sim 10 0 4`
+- 実機: テスト写真を JTAG で注入し、ソフトウェア版と同じ結果 ((232,80) 大きさ 188, 14 ヒット)
+- 作業中の注意: Vivado の GUI でプロジェクトを開いたままバッチで BD を変えると、GUI が run をリセットしたりプロジェクトファイルを上書きしたりする。バッチで作るときは GUI を閉じる
+
 ---
 
 ## 動作確認

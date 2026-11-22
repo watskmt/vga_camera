@@ -16,12 +16,17 @@
  *        stage: sum of leaf values >= stage threshold, else reject the window
  *   4. group the hits (OpenCV groupRectangles, eps 0.2, more than 3 neighbours)
  *
+ * hw-face branch: if rtl_haar/haar_engine.v is present (MAGIC at 0x44A3_001C), it
+ * evaluates the first stages of every window and only the windows that pass come
+ * back here for the remaining stages (ST_HW, cascade_tail).
+ *
  * The work is split into slices (budget given to face_poll) so that it can be
  * called from the main loop without stalling lwIP. Fixed point only (no FPU).
  */
 #include <string.h>
 #include <stdio.h>
 #include "xil_printf.h"
+#include "xil_io.h"
 #include "frame.h"
 #include "face.h"
 #include "face_cascade.h"
@@ -35,7 +40,7 @@
 #define MAX_RAW        512
 #define NORM_AREA      ((CASC_W - 2) * (CASC_H - 2))
 
-enum face_state { ST_IDLE, ST_DOWN, ST_LEVEL, ST_SCAN, ST_GROUP };
+enum face_state { ST_IDLE, ST_DOWN, ST_LEVEL, ST_SCAN, ST_GROUP, ST_HW };
 
 struct raw_hit { u16 x, y, w; };           /* base (160x120) coordinates */
 
@@ -78,7 +83,7 @@ static enum face_state st = ST_IDLE;
 static int snap = -1, gy;
 static u32 s_q8, lw, lh, stride, step, wx, wy;
 static u32 t_start, windows;
-static u32 t_state[5], weak_evals;         /* profiling (printed per detection) */
+static u32 t_state[6], weak_evals;         /* profiling (printed per detection) */
 
 /* published result */
 static struct face_box result[FACE_MAX];
@@ -350,6 +355,108 @@ static void group(void)
 	}
 }
 
+/* ── hardware engine (hw-face branch: rtl_haar/haar_engine.v) ──
+ * The engine evaluates the first hw_nst stages of every window of a level and
+ * returns the windows that pass; the remaining stages run here. Without the engine
+ * (MAGIC does not match) everything runs in software as before. */
+#define HAAR_BASE     0x44A30000u
+#define HAAR_CTRL     (HAAR_BASE + 0x00)
+#define HAAR_STATUS   (HAAR_BASE + 0x04)
+#define HAAR_LEVEL    (HAAR_BASE + 0x08)
+#define HAAR_FIFO     (HAAR_BASE + 0x0C)
+#define HAAR_WINDOWS  (HAAR_BASE + 0x10)
+#define HAAR_WEAKS    (HAAR_BASE + 0x14)
+#define HAAR_INFO     (HAAR_BASE + 0x18)
+#define HAAR_MAGIC    (HAAR_BASE + 0x1C)
+#define HAAR_IMG      (HAAR_BASE + 0x8000)
+#define HAAR_IMG_W    160
+
+static int hw_ok, hw_nst;
+static u32 hw_cand;                        /* windows handed to software (statistics) */
+
+static void hw_load_level(void)
+{
+	u32 x, y;
+
+	for (y = 0; y < lh; y++) {
+		const u8 *src = &lvl_img[y * lw];
+		for (x = 0; x < lw; x += 4) {
+			u32 v = src[x];
+			if (x + 1 < lw) v |= (u32)src[x + 1] << 8;
+			if (x + 2 < lw) v |= (u32)src[x + 2] << 16;
+			if (x + 3 < lw) v |= (u32)src[x + 3] << 24;
+			Xil_Out32(HAAR_IMG + y * HAAR_IMG_W + x, v);
+		}
+	}
+	Xil_Out32(HAAR_LEVEL, lw | (lh << 8) | (step == 2 ? 1u << 16 : 0));
+	Xil_Out32(HAAR_CTRL, 1);
+}
+
+/* stages si0 .. end for the window at (x, y) of the level image (window-local
+ * integral image, same sums as the band version) */
+static int cascade_tail(u32 x, u32 y, int si0)
+{
+	static u32 wii[(CASC_H + 1) * (CASC_W + 1)];
+	const u32 ws = CASC_W + 1;
+	const u8 *pi = (const u8 *)wii;
+	u32 r, c, k, s1, s2 = 0;
+	u64 nf2, ss;
+	s32 nf2x;
+	int si;
+
+	for (c = 0; c < ws; c++)
+		wii[c] = 0;
+	for (r = 0; r < CASC_H; r++) {
+		const u8 *src = &lvl_img[(y + r) * lw + x];
+		u32 rs = 0;
+		wii[(r + 1) * ws] = 0;
+		for (c = 0; c < CASC_W; c++) {
+			rs += src[c];
+			wii[(r + 1) * ws + c + 1] = wii[r * ws + c + 1] + rs;
+			if (r >= 1 && r <= CASC_H - 2 && c >= 1 && c <= CASC_W - 2)
+				s2 += src[c] * src[c];
+		}
+	}
+	s1 = rsb(pi, (ws + 1) * 4, (CASC_W - 2) * 4, (CASC_H - 2) * ws * 4);
+	nf2 = (u64)NORM_AREA * s2;
+	ss = (u64)s1 * s1;
+	nf2 = nf2 > ss ? nf2 - ss : 0;
+	if ((u32)(nf2 >> 32) == 0)
+		nf2x = isqrt32((u32)nf2);
+	else
+		nf2x = isqrt32((u32)(nf2 >> 2)) * 2;
+	if (nf2x == 0)
+		nf2x = 1;
+	nf2x *= 2;
+
+	for (si = si0; si < CASC_NSTAGES; si++) {
+		const struct casc_stage *sg = &casc_stages[si];
+		s32 acc = 0;
+		weak_evals += sg->count;
+		for (k = sg->first; k < (u32)sg->first + sg->count; k++) {
+			const struct casc_weak *wk = &casc_weaks[k];
+			s32 f = 0;
+			for (r = 0; r < wk->n; r++)
+				f += wk->wt[r] * (s32)rsb(pi, (wk->y[r] * ws + wk->x[r]) * 4,
+							  wk->w[r] * 4, wk->h[r] * ws * 4);
+			acc += f <= mulh(wk->thr, nf2x) ? wk->left : wk->right;
+		}
+		if (acc < sg->thr)
+			return 0;
+	}
+	return 1;
+}
+
+static void add_raw(u32 x, u32 y)
+{
+	if (raw_n < MAX_RAW) {
+		raw[raw_n].x = (x * s_q8 + 128) >> 8;
+		raw[raw_n].y = (y * s_q8 + 128) >> 8;
+		raw[raw_n].w = (CASC_W * s_q8 + 128) >> 8;
+		raw_n++;
+	}
+}
+
 /* ── public ── */
 void face_init(void)
 {
@@ -361,6 +468,20 @@ void face_init(void)
 		xil_printf("[face] HOT_MAX too small (%d)\r\n", (int)hot_n);
 	xil_printf("[face] Haar cascade %dx%d, %d stages, %d weak classifiers, image %dx%d\r\n",
 		   CASC_W, CASC_H, CASC_NSTAGES, CASC_NWEAK, BASE_W, BASE_H);
+	hw_ok = 0;
+	if (Xil_In32(HAAR_MAGIC) == 0x48414152u) {
+		u32 info = Xil_In32(HAAR_INFO);
+		hw_nst = info & 0xFF;
+		if (hw_nst > 0 && hw_nst < CASC_NSTAGES &&
+		    ((info >> 8) & 0xFFFF) == casc_stages[hw_nst].first) {
+			hw_ok = 1;
+			Xil_Out32(HAAR_CTRL, 2);              /* clear */
+		}
+		xil_printf("[face] HW engine: %d stages, %d weak classifiers%s\r\n", hw_nst,
+			   (int)((info >> 8) & 0xFFFF), hw_ok ? "" : " (does not match the cascade, not used)");
+	} else {
+		xil_printf("[face] no HW engine, software only\r\n");
+	}
 }
 
 void face_poll(u32 budget_us)
@@ -377,6 +498,7 @@ void face_poll(u32 budget_us)
 			t_start = frame_now_us();
 			memset(t_state, 0, sizeof(t_state));
 			weak_evals = 0;
+			hw_cand = 0;
 			gy = 0;
 			raw_n = 0;
 			windows = 0;
@@ -403,8 +525,35 @@ void face_poll(u32 budget_us)
 			}
 			level_setup();
 			wx = wy = 0;
-			st = ST_SCAN;
+			if (hw_ok) {
+				hw_load_level();
+				st = ST_HW;
+			} else {
+				st = ST_SCAN;
+			}
 			break;
+
+		case ST_HW: {
+			/* windows that passed the HW stages: run the rest here */
+			u32 v = Xil_In32(HAAR_FIFO);
+			if (v & 0x80000000u) {
+				x = v & 0xFF;
+				hw_cand++;
+				if (cascade_tail(x, (v >> 8) & 0xFF, hw_nst))
+					add_raw(x, (v >> 8) & 0xFF);
+			} else if (!(Xil_In32(HAAR_STATUS) & 1)) {
+				if (!(Xil_In32(HAAR_STATUS) >> 16)) {     /* done and FIFO empty */
+					windows += Xil_In32(HAAR_WINDOWS);
+					weak_evals += Xil_In32(HAAR_WEAKS);
+					s_q8 = (s_q8 * SCALE_Q8 + 128) >> 8;
+					st = ST_LEVEL;
+				}
+			} else {
+				t_state[cur] += frame_now_us() - ts;
+				return;                       /* engine busy, nothing to do: yield */
+			}
+			break;
+		}
 
 		case ST_SCAN:
 			/* up to 8 windows per step so that a slice stays close to its budget */
@@ -442,9 +591,15 @@ void face_poll(u32 budget_us)
 					xil_printf(" (%d,%d %d)", result[i].x, result[i].y, result[i].w);
 				xil_printf("\r\n");
 			}
-			xil_printf("[face] time: down %d, level %d, scan %d ms, weak evals %d\r\n",
-				   (int)(t_state[ST_DOWN] / 1000), (int)(t_state[ST_LEVEL] / 1000),
-				   (int)(t_state[ST_SCAN] / 1000), (int)weak_evals);
+			if (hw_ok)
+				xil_printf("[face] time: down %d, level %d, hw wait+tail %d ms, weak evals %d, "
+					   "%d windows to software\r\n",
+					   (int)(t_state[ST_DOWN] / 1000), (int)(t_state[ST_LEVEL] / 1000),
+					   (int)(t_state[ST_HW] / 1000), (int)weak_evals, (int)hw_cand);
+			else
+				xil_printf("[face] time: down %d, level %d, scan %d ms, weak evals %d\r\n",
+					   (int)(t_state[ST_DOWN] / 1000), (int)(t_state[ST_LEVEL] / 1000),
+					   (int)(t_state[ST_SCAN] / 1000), (int)weak_evals);
 			st = ST_IDLE;
 			return;
 		}

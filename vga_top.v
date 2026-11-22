@@ -159,8 +159,16 @@ module vga_top (
     //   SYSCLK (100 MHz, BD 内 clk_wiz_0/sysclk) ドメイン
     wire        bd_sysclk;
     wire        bd_sysrst_n;
-    wire [23:0] tpg_tdata;        // v_tpg_0 出力 (BD → RTL)
-    wire        tpg_tvalid, tpg_tready, tpg_tlast, tpg_tuser;
+    // hw-face ブランチ: v_tpg_0 は削除 (リソース削減)。TPG 入力は無効 (SW0 を ON にすると映像が止まる)
+    wire [23:0] tpg_tdata  = 24'd0;
+    wire        tpg_tvalid = 1'b0, tpg_tlast = 1'b0, tpg_tuser = 1'b0;
+    wire        tpg_tready;
+    // 顔検出エンジン (rtl_haar/haar_engine.v) の AXI4-Lite (BD の M_AXI_HAAR, 0x44A3_0000)
+    wire [31:0] haar_awaddr, haar_wdata, haar_araddr, haar_rdata;
+    wire [3:0]  haar_wstrb;
+    wire [1:0]  haar_bresp, haar_rresp;
+    wire        haar_awvalid, haar_awready, haar_wvalid, haar_wready, haar_bvalid, haar_bready;
+    wire        haar_arvalid, haar_arready, haar_rvalid, haar_rready;
     wire [23:0] vid_tdata;        // VDMA S2MM 入力 (RTL → BD)
     wire        vid_tvalid, vid_tready, vid_tlast, vid_tuser;
     wire [31:0] cfg_awaddr, cfg_wdata, cfg_araddr, cfg_rdata;
@@ -209,11 +217,25 @@ module vga_top (
         // ── カメラ → DDR3 用 (cam_ddr_bd.tcl で追加) ──
         .SYSCLK              (bd_sysclk),
         .SYSRST_N            (bd_sysrst_n),
-        .M_AXIS_TPG_tdata    (tpg_tdata),
-        .M_AXIS_TPG_tvalid   (tpg_tvalid),
-        .M_AXIS_TPG_tready   (tpg_tready),
-        .M_AXIS_TPG_tlast    (tpg_tlast),
-        .M_AXIS_TPG_tuser    (tpg_tuser),
+        .M_AXI_HAAR_awaddr   (haar_awaddr),
+        .M_AXI_HAAR_awprot   (),
+        .M_AXI_HAAR_awvalid  (haar_awvalid),
+        .M_AXI_HAAR_awready  (haar_awready),
+        .M_AXI_HAAR_wdata    (haar_wdata),
+        .M_AXI_HAAR_wstrb    (haar_wstrb),
+        .M_AXI_HAAR_wvalid   (haar_wvalid),
+        .M_AXI_HAAR_wready   (haar_wready),
+        .M_AXI_HAAR_bresp    (haar_bresp),
+        .M_AXI_HAAR_bvalid   (haar_bvalid),
+        .M_AXI_HAAR_bready   (haar_bready),
+        .M_AXI_HAAR_araddr   (haar_araddr),
+        .M_AXI_HAAR_arprot   (),
+        .M_AXI_HAAR_arvalid  (haar_arvalid),
+        .M_AXI_HAAR_arready  (haar_arready),
+        .M_AXI_HAAR_rdata    (haar_rdata),
+        .M_AXI_HAAR_rresp    (haar_rresp),
+        .M_AXI_HAAR_rvalid   (haar_rvalid),
+        .M_AXI_HAAR_rready   (haar_rready),
         .S_AXIS_VID_tdata    (vid_tdata),
         .S_AXIS_VID_tvalid   (vid_tvalid),
         .S_AXIS_VID_tready   (vid_tready),
@@ -267,6 +289,19 @@ module vga_top (
         .SPI_0_ss_i          (qspi_ss_i),
         .SPI_0_ss_o          (qspi_ss_o),
         .SPI_0_ss_t          (qspi_ss_t)
+    );
+
+    // 顔検出エンジン: 最初の 10 段の判定をハードウェアで行う (hw-face ブランチ)
+    haar_engine u_haar (
+        .aclk          (bd_sysclk),
+        .aresetn       (bd_sysrst_n),
+        .s_axi_awaddr  (haar_awaddr[15:0]), .s_axi_awvalid (haar_awvalid), .s_axi_awready (haar_awready),
+        .s_axi_wdata   (haar_wdata),        .s_axi_wstrb   (haar_wstrb),   .s_axi_wvalid  (haar_wvalid),
+        .s_axi_wready  (haar_wready),       .s_axi_bresp   (haar_bresp),   .s_axi_bvalid  (haar_bvalid),
+        .s_axi_bready  (haar_bready),
+        .s_axi_araddr  (haar_araddr[15:0]), .s_axi_arvalid (haar_arvalid), .s_axi_arready (haar_arready),
+        .s_axi_rdata   (haar_rdata),        .s_axi_rresp   (haar_rresp),   .s_axi_rvalid  (haar_rvalid),
+        .s_axi_rready  (haar_rready)
     );
 
     // QSPI: 標準 SPI (x1) で使うので DQ2 (WP#) / DQ3 (HOLD#) は常に 1
@@ -399,7 +434,7 @@ module vga_top (
     // =========================================================================
     wire cam_ddr_cfg_done, cam_ddr_cfg_err, cam_ddr_ovf;
 
-    cam_ddr u_cam_ddr (
+    cam_ddr #(.USE_TPG(0)) u_cam_ddr (
         .cam_clk       (pix_clk),
         .cam_rst_n     (rst_n_cam),
         .pix_we        (pix_we),
@@ -512,6 +547,7 @@ module vga_top (
     always @(posedge pclk) ddr3_calib_sync <= {ddr3_calib_sync[0], ddr3_calib_done};
     wire ddr3_calib_done_pclk = ddr3_calib_sync[1];
 
+`ifdef USE_ILA      // hw-face ブランチ: ILA は外す (リソース削減)
     ila_cam u_ila_cam (
         .clk    (pclk),
         .probe0 (cam_d),
@@ -520,6 +556,7 @@ module vga_top (
         .probe3 (pix_rgb[15:8]),
         .probe4 ({vga_hs, vga_vs, ddr3_calib_done_pclk, sw_test, fbt_y8})
     );
+`endif
 
     // =========================================================================
     // 6. ステータス LED (静的表示なので同期化しない)

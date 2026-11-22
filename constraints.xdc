@@ -182,10 +182,10 @@ set_false_path -to [get_cells {u_cam_ddr/run_sync_reg[0]}]
 #   JTAG クロックの 2.5 倍以上必要 (Digilent 既定 JTAG = 15 MHz) なので
 #   100 MHz の clk100 に接続する。
 # =============================================================================
-set_property C_CLK_INPUT_FREQ_HZ 100000000 [get_debug_cores dbg_hub]
-set_property C_ENABLE_CLK_DIVIDER false    [get_debug_cores dbg_hub]
-set_property C_USER_SCAN_CHAIN 1           [get_debug_cores dbg_hub]
-connect_debug_port dbg_hub/clk [get_nets clk100]
+# (hw-face: ILA なし) set_property C_CLK_INPUT_FREQ_HZ 100000000 [get_debug_cores dbg_hub]
+# (hw-face: ILA なし) set_property C_ENABLE_CLK_DIVIDER false    [get_debug_cores dbg_hub]
+# (hw-face: ILA なし) set_property C_USER_SCAN_CHAIN 1           [get_debug_cores dbg_hub]
+# (hw-face: ILA なし) connect_debug_port dbg_hub/clk [get_nets clk100]
 
 # =============================================================================
 # コンフィギュレーション / QSPI フラッシュ起動 (MCS 用)
